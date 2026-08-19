@@ -1,0 +1,8 @@
+streamlit>=1.30.0
+earthengine-api
+geemap
+streamlit-folium
+folium
+shapely
+pandas
+pyproj

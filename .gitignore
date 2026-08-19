@@ -1,0 +1,10 @@
+# Środowisko wirtualne
+.venv/
+
+# Klucze i sekrety (zakładając, że masz je w folderze .streamlit)
+.streamlit/secrets.toml
+
+# Pliki tymczasowe Pythona i IDE
+__pycache__/
+.idea/
+.DS_Store
