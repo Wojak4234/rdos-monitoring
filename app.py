@@ -34,8 +34,11 @@ header {visibility: hidden;}
 /* Ukrywa stopkę "Made with Streamlit" */
 footer {visibility: hidden;}
 
-/* Ukrywa ewentualne badge i odznaki hostingu */
+/* Ukrywa pływający badge profilowy / Streamlit Cloud w prawym dolnym rogu */
 .viewerBadge_container {display: none !important;}
+div[data-testid="stStatusWidget"] {visibility: hidden;}
+.styles_viewerBadge__1yG5_ {display: none !important;}
+[data-testid="stDecoration"] {display: none;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
