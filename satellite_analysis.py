@@ -2,6 +2,7 @@ import ee
 import pandas as pd
 import datetime
 import requests
+import urllib.parse
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -228,22 +229,40 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (Dodano tunelowanie przez bramkę AllOrigins) ---
+# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (System Fallback - Bezpośrednio -> Proxy) ---
+
+def fetch_with_fallback(target_url):
+    """Pomocnicza funkcja, która próbuje połączyć się na kilka sposobów, omijając blokady."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+
+    # 1. Próba bezpośrednia (szybka)
+    try:
+        response = requests.get(target_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass  # Jeśli zablokują IP lub timeout, lecimy dalej w milczeniu
+
+    # 2. Próba przez bramkę corsproxy.io (wydajniejsza niż allorigins)
+    try:
+        encoded_url = urllib.parse.quote(target_url, safe='')
+        proxy_url = f"https://corsproxy.io/?{encoded_url}"
+        response = requests.get(proxy_url, headers=headers, timeout=25)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise Exception(
+            f"Serwery GIOŚ odrzuciły wszystkie próby połączenia (bezpośrednie i przez bramkę). Odczekaj chwilę. Błąd: {e}")
+
 
 def get_gios_stations():
-    """Pobiera listę stacji pomiarowych GIOŚ przez bramkę Proxy."""
+    """Pobiera listę stacji pomiarowych GIOŚ z Polski i filtruje woj. zachodniopomorskie."""
     try:
-        # Prawdziwy adres GIOŚ ukrywamy za bramką proxy, żeby ominąć blokadę IP Streamlita
         target_url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
-        proxy_url = f"https://api.allorigins.win/raw?url={target_url}"
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        }
-
-        response = requests.get(proxy_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        stations = response.json()
+        stations = fetch_with_fallback(target_url)
 
         zachodniopomorskie_stations = []
         for s in stations:
@@ -252,22 +271,14 @@ def get_gios_stations():
                     zachodniopomorskie_stations.append(s)
         return zachodniopomorskie_stations
     except Exception as e:
-        raise Exception(f"Błąd komunikacji z proxy API GIOŚ (Stacje): {e}")
+        raise Exception(f"Błąd komunikacji ze stacjami GIOŚ: {e}")
 
 
 def get_gios_aqi(station_id):
-    """Odpytuje konkretną stację przez bramkę Proxy."""
+    """Odpytuje konkretną stację o aktualny Indeks Jakości Powietrza."""
     try:
         target_url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
-        proxy_url = f"https://api.allorigins.win/raw?url={target_url}"
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        }
-
-        response = requests.get(proxy_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        data = fetch_with_fallback(target_url)
 
         if data.get('stIndexLevel') and data['stIndexLevel'].get('indexLevelName'):
             return data['stIndexLevel']['indexLevelName'], data.get('stCalcDate', 'Brak daty')
