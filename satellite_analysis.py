@@ -196,7 +196,6 @@ def get_water_quality_layer(target_date):
 
 
 def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
-    """Pobiera wektory z OpenStreetMap na podstawie okna Bounding Box."""
     try:
         tags = {
             "Pomniki przyrody": '["denotation"="natural_monument"]',
@@ -227,3 +226,41 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         return response.json()
     except requests.exceptions.RequestException as e:
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
+
+
+# --- NOWE FUNKCJE DLA GIOŚ ---
+
+def get_gios_stations():
+    """Pobiera listę stacji pomiarowych GIOŚ z Polski i filtruje woj. zachodniopomorskie."""
+    try:
+        url = "http://api.gios.gov.pl/pjp-api/rest/station/findAll"
+        response = requests.get(url)
+        response.raise_for_status()
+        stations = response.json()
+
+        zachodniopomorskie_stations = []
+        for s in stations:
+            # Weryfikacja struktury JSON, żeby uniknąć błędu KeyError, gdy brakuje danych
+            if s.get('city') and s['city'].get('commune') and s['city']['commune'].get('provinceName'):
+                if s['city']['commune']['provinceName'].upper() == 'ZACHODNIOPOMORSKIE':
+                    zachodniopomorskie_stations.append(s)
+        return zachodniopomorskie_stations
+    except Exception as e:
+        raise Exception(f"Błąd komunikacji z API GIOŚ (Stacje): {e}")
+
+
+def get_gios_aqi(station_id):
+    """Odpytuje konkretną stację o aktualny Indeks Jakości Powietrza."""
+    try:
+        url = f"http://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        # Próba wyciągnięcia głównego indeksu lub zwrócenia informacji o braku
+        if data.get('stIndexLevel') and data['stIndexLevel'].get('indexLevelName'):
+            return data['stIndexLevel']['indexLevelName'], data.get('stCalcDate', 'Brak daty')
+        else:
+            return "Brak danych pomiarowych", "Brak daty"
+    except Exception:
+        return "Błąd odczytu", "Brak daty"

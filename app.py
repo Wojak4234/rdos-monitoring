@@ -17,7 +17,9 @@ from satellite_analysis import (
     get_parameter_info,
     get_s2_water_dates,
     get_water_quality_layer,
-    get_osm_data_bbox
+    get_osm_data_bbox,
+    get_gios_stations,
+    get_gios_aqi
 )
 
 st.set_page_config(layout="wide")
@@ -35,6 +37,7 @@ if init_gee():
             (
                 "Obszary Natura 2000 (Wskaźniki)",
                 "Zanieczyszczenie powietrza (S5P)",
+                "Pomiary naziemne (GIOŚ)",
                 "Jakość Wód (Chlorofil-a)",
                 "Dane wektorowe (OSM)"
             )
@@ -176,7 +179,59 @@ if init_gee():
                 st.warning(
                     "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
 
-        # ---------------- MODUŁ 3: JAKOŚĆ WÓD (NDCI) ----------------
+        # ---------------- MODUŁ 3: STACJE GIOŚ ----------------
+        elif modul == "Pomiary naziemne (GIOŚ)":
+            st.header("📍 Pomiary naziemne jakości powietrza (API GIOŚ)")
+            st.markdown(
+                "Ten moduł łączy się na żywo z Głównym Inspektoratem Ochrony Środowiska, aby zweryfikować dane satelitarne za pomocą oficjalnych stacji naziemnych w woj. zachodniopomorskim.")
+
+            if st.button("Pobierz aktualne dane ze stacji"):
+                with st.spinner("Odpytuję serwery GIOŚ..."):
+                    try:
+                        stations = get_gios_stations()
+                        if stations:
+                            m_gios = folium.Map(location=[53.6, 15.6], zoom_start=8)
+
+                            for s in stations:
+                                s_id = s['id']
+                                lat = float(s['gegrLat'])
+                                lon = float(s['gegrLon'])
+                                name = s['stationName']
+
+                                # Pobieramy jakość powietrza
+                                aqi_level, calc_date = get_gios_aqi(s_id)
+
+                                # Logika kolorowania
+                                color = "gray"
+                                if aqi_level == "Bardzo dobry":
+                                    color = "darkgreen"
+                                elif aqi_level == "Dobry":
+                                    color = "green"
+                                elif aqi_level == "Umiarkowany":
+                                    color = "orange"
+                                elif aqi_level in ["Dostateczny", "Zły"]:
+                                    color = "lightred"
+                                elif aqi_level == "Bardzo zły":
+                                    color = "red"
+
+                                popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
+
+                                folium.Marker(
+                                    [lat, lon],
+                                    popup=folium.Popup(popup_html, max_width=300),
+                                    tooltip=name,
+                                    icon=folium.Icon(color=color, icon="info-sign")
+                                ).add_to(m_gios)
+
+                            st.success(f"Pobrano dane dla {len(stations)} stacji w województwie.")
+                            st_folium(m_gios, width=1100, height=600, returned_objects=[])
+
+                        else:
+                            st.warning("Nie znaleziono stacji GIOŚ dla wybranego województwa.")
+                    except Exception as e:
+                        st.error(str(e))
+
+        # ---------------- MODUŁ 4: JAKOŚĆ WÓD (NDCI) ----------------
         elif modul == "Jakość Wód (Chlorofil-a)":
             st.header("💧 Monitoring jakości wód (Odra i Zalew Szczeciński)")
             st.markdown(
@@ -229,7 +284,7 @@ if init_gee():
             else:
                 st.warning("Nie znaleziono bezchmurnych zdjęć dla tego obszaru w ciągu ostatnich 90 dni.")
 
-        # ---------------- MODUŁ 4: DANE WEKTOROWE (OSM) ----------------
+        # ---------------- MODUŁ 5: DANE WEKTOROWE (OSM) ----------------
         elif modul == "Dane wektorowe (OSM)":
             st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
             st.markdown(
@@ -265,18 +320,15 @@ if init_gee():
                     try:
                         geom_osm = shape(feat_osm["geometry"])
 
-                        # Profesjonalny pipeline GIS:
-                        # 1. Przerzucamy z WGS84 na PUWG 1992 (EPSG:2180) dla rzetelnego przeliczenia metrów
                         project_to_2180 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2180",
                                                                       always_xy=True).transform
                         project_to_4326 = pyproj.Transformer.from_crs("EPSG:2180", "EPSG:4326",
                                                                       always_xy=True).transform
 
                         geom_2180 = transform(project_to_2180, geom_osm)
-                        buffered_2180 = geom_2180.buffer(promien)  # Bufor na całym wielokącie!
+                        buffered_2180 = geom_2180.buffer(promien)
                         buffered_4326 = transform(project_to_4326, buffered_2180)
 
-                        # 2. Wyznaczamy zewnętrzny Bounding Box dla zapytania
                         min_lon, min_lat, max_lon, max_lat = buffered_4326.bounds
 
                     except Exception as e:
@@ -297,7 +349,6 @@ if init_gee():
 
                     for el in elements:
                         geom_osm_el = None
-                        # Konwertujemy odpowiedź OSM na geometrię Shapely
                         if el["type"] == "node":
                             geom_osm_el = Point(el["lon"], el["lat"])
                         elif el["type"] in ["way", "relation"] and "geometry" in el:
@@ -305,25 +356,21 @@ if init_gee():
                             if len(coords) >= 2:
                                 geom_osm_el = LineString(coords)
 
-                        # Magia przestrzenna: zostawiamy to co się przecina
                         if geom_osm_el and buffered_4326.intersects(geom_osm_el):
                             filtered_elements.append(el)
 
                     m_osm = folium.Map(location=[geom_osm.centroid.y, geom_osm.centroid.x], zoom_start=10)
 
-                    # Wizualizacja oryginalnego obszaru Natura 2000
                     folium.GeoJson(
                         feat_osm,
                         style_function=lambda x: {'color': 'black', 'fillOpacity': 0.4, 'weight': 2}
                     ).add_to(m_osm)
 
-                    # Wizualizacja naszego precyzyjnego bufora
                     folium.GeoJson(
                         mapping(buffered_4326),
                         style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1, 'weight': 2, 'dashArray': '5, 5'}
                     ).add_to(m_osm)
 
-                    # Nakładanie tylko odfiltrowanych obiektów
                     if filtered_elements:
                         for el in filtered_elements:
                             name = el.get("tags", {}).get("name", "Brak nazwy")
@@ -344,7 +391,6 @@ if init_gee():
                     st_folium(m_osm, width=1100, height=600, returned_objects=[])
 
                     if filtered_elements:
-                        # Eksportujemy tylko i wyłącznie obiekty odfiltrowane!
                         osm_results["elements"] = filtered_elements
                         json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
                         st.download_button(
