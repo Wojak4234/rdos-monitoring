@@ -88,6 +88,8 @@ if init_gee():
                 st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
                 st.line_chart(st.session_state["df_ts"])
 
+                info_n2k = get_parameter_info(selected_index)
+
                 col_csv, col_pdf = st.columns(2)
                 with col_csv:
                     csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
@@ -99,13 +101,18 @@ if init_gee():
                     )
                 with col_pdf:
                     pdf_bytes = generate_general_pdf_report(
-                        title="Analiza Wskaźnika Satelitarnego",
-                        subtitle=f"Obszar: {wybrany} ({typ})",
+                        title=f"Analiza Wskaznika - {selected_index}",
+                        subtitle=f"Obszar Natura 2000: {wybrany} ({typ})",
                         df_data=st.session_state["df_ts"],
-                        details_dict={"Wskaźnik": selected_index, "Okres": f"{start_date} do {end_date}"}
+                        details_dict={
+                            "Wskaznik": selected_index,
+                            "Okres": f"{start_date} do {end_date}",
+                            "Opis merytoryczny": info_n2k.get("opis", ""),
+                            "Interpretacja": info_n2k.get("normy", "")
+                        }
                     )
                     st.download_button(
-                        label="📥 Pobierz raport PDF",
+                        label="📥 Pobierz oficjalny raport PDF",
                         data=pdf_bytes,
                         file_name=f"raport_{selected_index.split()[0]}_{wybrany}.pdf",
                         mime="application/pdf"
@@ -177,15 +184,17 @@ if init_gee():
                                             f"**Jak interpretować wartości na mapie?**<br>{param_info['normy']}",
                                             unsafe_allow_html=True)
 
-                                # Przycisk raportu PDF dla atmosfery S5P
                                 pdf_bytes = generate_general_pdf_report(
-                                    title="Raport Zanieczyszczeń Atmosferycznych (Sentinel-5P)",
-                                    subtitle=f"Parametr: {selected_param} | Data: {selected_date_str}",
-                                    details_dict={"Opis": param_info.get('opis', ''),
-                                                  "Normy": param_info.get('normy', '')}
+                                    title=f"Raport Zanieczyszczen Atmosferycznych - {selected_param}",
+                                    subtitle=f"Zobrazowanie satelitarne z dnia: {selected_date_str}",
+                                    details_dict={
+                                        "Parametr": selected_param,
+                                        "Opis merytoryczny": param_info.get("opis", ""),
+                                        "Normy i progi": param_info.get("normy", "")
+                                    }
                                 )
                                 st.download_button(
-                                    label="📥 Pobierz podsumowanie PDF",
+                                    label="📥 Pobierz oficjalny raport PDF",
                                     data=pdf_bytes,
                                     file_name=f"raport_atmosfera_{selected_param.split()[0]}_{selected_date_str}.pdf",
                                     mime="application/pdf"
@@ -295,6 +304,20 @@ if init_gee():
                         display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
                         st.dataframe(display_df, use_container_width=True)
 
+                        # Panel wyboru zakresu czasu do PDF
+                        st.markdown("#### ⚙️ Ustawienia raportu PDF")
+                        min_d = df_filtered.index.min().date()
+                        max_d = min(df_filtered.index.max().date(), pd.Timestamp.today().date())
+
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            rep_start = st.date_input("Od daty:", value=min_d, min_value=min_d, max_value=max_d)
+                        with c2:
+                            rep_end = st.date_input("Do daty:", value=max_d, min_value=min_d, max_value=max_d)
+
+                        mask = (df_filtered.index.date >= rep_start) & (df_filtered.index.date <= rep_end)
+                        df_final_pdf = df_filtered.loc[mask]
+
                         col_csv, col_pdf = st.columns(2)
                         with col_csv:
                             csv_hist = display_df.to_csv().encode('utf-8')
@@ -306,9 +329,9 @@ if init_gee():
                             )
                         with col_pdf:
                             pdf_bytes = generate_general_pdf_report(
-                                title="Raport Pomiary Naziemne (GIOŚ / Copernicus)",
-                                subtitle=f"Stacja pomiarowa: {selected_station}",
-                                df_data=df_filtered
+                                title="Raport Pomiary Naziemne (GIOS / Copernicus)",
+                                subtitle=f"Stacja pomiarowa: {selected_station} | Okres: {rep_start} do {rep_end}",
+                                df_data=df_final_pdf
                             )
                             st.download_button(
                                 label="📥 Pobierz oficjalny raport PDF",
@@ -360,14 +383,19 @@ if init_gee():
                                 st.success("Wygenerowano mapę chlorofilu!")
                                 st_folium(m_water, width=1100, height=600, returned_objects=[])
 
+                                info_wody = get_parameter_info("Chlorofil-a (NDCI)")
                                 pdf_bytes = generate_general_pdf_report(
-                                    title="Raport Jakości Wód (Sentinel-2 NDCI)",
-                                    subtitle=f"Obszar: Odra i Zalew Szczeciński | Data: {selected_water_date}",
-                                    details_dict={"Wskaźnik": "NDCI (Chlorofil-a)",
-                                                  "Skala": "Ciemnoniebieski = woda czysta, Żółty/Czerwony = zakwity"}
+                                    title="Raport Jakosci Wod (Sentinel-2 NDCI)",
+                                    subtitle=f"Obszar: Odra i Zalew Szczecinski | Data: {selected_water_date}",
+                                    details_dict={
+                                        "Wskaznik": "Chlorofil-a (NDCI)",
+                                        "Opis merytoryczny": info_wody.get("opis", ""),
+                                        "Normy i interpretacja": info_wody.get("normy", ""),
+                                        "Skala": "Ciemnoniebieski = woda czysta, Żółty/Czerwony = zakwity/dużo materii organicznej"
+                                    }
                                 )
                                 st.download_button(
-                                    label="📥 Pobierz raport PDF (Jakość Wód)",
+                                    label="📥 Pobierz oficjalny raport PDF",
                                     data=pdf_bytes,
                                     file_name=f"raport_jakosc_wod_{selected_water_date}.pdf",
                                     mime="application/pdf"
@@ -460,7 +488,6 @@ if init_gee():
                             osm_results["elements"] = filtered_elements
                             json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
 
-                            # Przygotowanie danych do tabeli w raporcie PDF OSM
                             osm_rows = []
                             for el in filtered_elements:
                                 osm_rows.append({
@@ -480,14 +507,14 @@ if init_gee():
                                 )
                             with col_pdf:
                                 pdf_bytes = generate_general_pdf_report(
-                                    title="Raport Obiektów Wektorowych (OpenStreetMap)",
+                                    title="Raport Obiektow Wektorowych (OpenStreetMap)",
                                     subtitle=f"Obszar Natura 2000: {wybrany_osm} | Kategoria: {kategoria_osm}",
                                     df_data=df_osm_summary,
-                                    details_dict={"Bufer": f"{promien} metrów",
-                                                  "Liczba znalezionych obiektów": len(filtered_elements)}
+                                    details_dict={"Bufor": f"{promien} metrów",
+                                                  "Liczba znalezionych obiektow": len(filtered_elements)}
                                 )
                                 st.download_button(
-                                    label="📥 Pobierz raport PDF (OSM)",
+                                    label="📥 Pobierz oficjalny raport PDF",
                                     data=pdf_bytes,
                                     file_name=f"raport_osm_{kategoria_osm.replace(' ', '_')}.pdf",
                                     mime="application/pdf"

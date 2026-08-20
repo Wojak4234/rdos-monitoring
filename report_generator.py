@@ -51,7 +51,7 @@ def create_chart_image(df_data):
 
 def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None):
     """
-    Uniwersalny generator raportów PDF z rygorystycznym odcięciem danych z przyszłości oraz średnimi godzinnymi.
+    Uniwersalny generator raportów PDF z opisami merytorycznymi, wykresem i tabelą godzinową.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -87,7 +87,7 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
         parent=styles['Normal'],
         fontSize=8,
         textColor=colors.HexColor("#333333"),
-        spaceAfter=4
+        spaceAfter=6
     )
 
     clean_title = remove_polish_chars(title)
@@ -97,17 +97,18 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     story.append(Paragraph(clean_subtitle, subtitle_style))
     story.append(Spacer(1, 4))
 
+    # Wstrzykiwanie opisów i metadanych (np. normy, definicje wskaźników)
     if details_dict:
         for k, v in details_dict.items():
             ck = remove_polish_chars(str(k))
             cv = remove_polish_chars(str(v))
             story.append(Paragraph(f"<b>{ck}:</b> {cv}", normal_style))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 8))
 
+    # Jeśli przekazano DataFrame (dane pomiarowe / szeregi czasowe)
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
 
-        # Konwersja indeksu i czyszczenie stref czasowych
         try:
             if not isinstance(df_processed.index, pd.DatetimeIndex):
                 df_processed.index = pd.to_datetime(df_processed.index)
@@ -116,18 +117,13 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
         except Exception:
             pass
 
-        # Rygorystyczne odcięcie przyszłości (wszystko po bieżącym czasie wylatuje)
+        # Rygorystyczne odcięcie przyszłości
         if isinstance(df_processed.index, pd.DatetimeIndex):
             current_time = pd.Timestamp.now().tz_localize(None)
             df_processed = df_processed[df_processed.index <= current_time]
-
-            # Agregacja do średnich godzinnych
             df_processed = df_processed.resample('h').mean().dropna(how='all')
 
-        if df_processed.empty:
-            story.append(Paragraph("Brak danych historycznych dla wybranego okresu.", normal_style))
-        else:
-            # Generowanie wykresu
+        if not df_processed.empty:
             try:
                 img_buf = create_chart_image(df_processed)
                 story.append(Image(img_buf, width=450, height=200))
@@ -135,7 +131,6 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             except Exception as e:
                 print(f"Blod generowania wykresu do PDF: {e}")
 
-            # Przygotowanie tabeli
             df_table = df_processed.copy()
             df_table.reset_index(inplace=True)
             date_col = df_table.columns[0]
