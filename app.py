@@ -1,6 +1,7 @@
 import streamlit as st
 import folium
 import pandas as pd
+import branca.colormap as cm
 from streamlit_folium import st_folium
 from shapely.geometry import shape
 
@@ -84,18 +85,15 @@ if init_gee():
             st.header("🏭 Monitoring jakości powietrza (Zachodniopomorskie)")
             st.markdown("Krok 1: Wybierz parametr gazowy. Krok 2: Wybierz z listy jedną z dostępnych dat.")
 
-            # WYBÓR GAZU
             selected_param = st.selectbox(
                 "Wybierz badany gaz/parametr:",
                 ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)", "Aerozole (Smog / Pyły)")
             )
 
-            # Sprawdzamy czy użytkownik zmienił gaz (żeby pobrać nowe daty)
             if "last_param" not in st.session_state or st.session_state["last_param"] != selected_param:
                 st.session_state["last_param"] = selected_param
                 st.session_state["available_dates"] = None
 
-            # Jeśli nie mamy dat w pamięci dla tego gazu, pobieramy je
             if st.session_state["available_dates"] is None:
                 with st.spinner("Przeszukuję archiwum GEE w poszukiwaniu dostępnych zdjęć..."):
                     try:
@@ -106,14 +104,14 @@ if init_gee():
 
             dates = st.session_state["available_dates"]
 
-            # WYBÓR DATY Z LISTY ZNALEZIONYCH
             if dates:
                 selected_date_str = st.selectbox("Wybierz datę zobrazowania:", dates)
 
                 if st.button("Generuj mapę zanieczyszczeń"):
                     with st.spinner(f"Przetwarzanie mapy {selected_param} dla daty {selected_date_str}..."):
                         try:
-                            tile_url = get_atmospheric_layer(selected_date_str, selected_param)
+                            # Odbieramy 3 wartości zamiast jednej
+                            tile_url, min_val, max_val = get_atmospheric_layer(selected_date_str, selected_param)
 
                             if tile_url:
                                 m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
@@ -127,13 +125,24 @@ if init_gee():
                                     opacity=0.6
                                 ).add_to(m_atm)
 
+                                # DODAWANIE LEGENDY (Colormap)
+                                colormap = cm.LinearColormap(
+                                    colors=['yellow', 'orange', 'red', 'purple'],
+                                    vmin=min_val,
+                                    vmax=max_val
+                                )
+                                colormap.caption = f"Wartość stężenia ({selected_param.split()[0]})"
+                                colormap.add_to(m_atm)
+
                                 folium.LayerControl().add_to(m_atm)
 
-                                st.success(
-                                    f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
+                                st.success(f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
                                 st_folium(m_atm, width=1100, height=600, returned_objects=[])
                             else:
                                 st.error("Nie udało się pobrać warstwy (prawdopodobnie brak danych po filtracji).")
                         except Exception as e:
-                            st.error(
-                                f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")
+                            st.error(f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")
+            else:
+                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
+    else:
+        st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")

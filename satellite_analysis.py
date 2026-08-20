@@ -72,21 +72,18 @@ def get_available_dates(parameter, days_back=90):
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
-        # MAGIA JEST TUTAJ: Zamiast całego województwa, używamy jednego punktu
-        # To zapytanie jest 100x szybsze i gwarantuje znalezienie dat przelotu!
+        # Pojedynczy punkt (Szczecin/centrum regionu) dla błyskawicznego wyszukiwania
         point = ee.Geometry.Point([15.6, 53.6])
 
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
             .filterDate(str(start_date), str(end_date)) \
             .filterBounds(point)
 
-        # Pobieramy daty z metadanych
         times = s5p.aggregate_array('system:time_start').getInfo()
 
         if not times:
             return []
 
-        # Zamieniamy je na ładną listę (bez duplikatów)
         dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
         dates.sort(reverse=True)
         return dates
@@ -100,7 +97,6 @@ def get_atmospheric_layer(target_date, parameter):
         start = ee.Date(target_date)
         end = start.advance(1, 'day')
 
-        # Obniżone progi - zachodniopomorskie jest czyste, więc musimy być bardziej czuli!
         if parameter == "NO2 (Dwutlenek azotu)":
             col, band, threshold, max_val = 'L3_NO2', 'tropospheric_NO2_column_number_density', 0.00002, 0.0001
         elif parameter == "SO2 (Dwutlenek siarki)":
@@ -110,21 +106,19 @@ def get_atmospheric_layer(target_date, parameter):
         elif parameter == "Aerozole (Smog / Pyły)":
             col, band, threshold, max_val = 'L3_AER_AI', 'absorbing_aerosol_index', 0.1, 2.0
         else:
-            return None
+            return None, None, None
 
-        # Pobieramy obraz (bez ciężkiego wycinania wielokątem)
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
             .filterDate(start, end) \
             .select(band) \
             .mean()
 
-        # Odcinamy tylko całkowicie puste/najczystsze tło
         s5p_high = s5p.updateMask(s5p.gt(threshold))
 
         viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
         map_id_dict = s5p_high.getMapId(viz)
 
-        return map_id_dict['tile_fetcher'].url_format
+        # Zwracamy adres warstwy oraz wartości min/max do legendy
+        return map_id_dict['tile_fetcher'].url_format, threshold, max_val
     except Exception as e:
-        # Zwracamy prawdziwy błąd, a nie None
         raise Exception(f"Błąd GEE: {str(e)}")
