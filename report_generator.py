@@ -43,9 +43,10 @@ def create_chart_image(df_data):
     return img_buffer
 
 
-def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None, map_image_buffer=None):
+def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None, lat=None, lon=None,
+                                station_name="Obszar", map_image_buffer=None):
     """
-    Uniwersalny generator raportów PDF z obsługą mapy rastrowej z GEE (wklejanej z bufora RAM).
+    Uniwersalny generator raportów PDF obsługujący współrzędne, bufory map i szeregi czasowe.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -89,7 +90,7 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     story.append(Paragraph(remove_polish_chars(subtitle), subtitle_style))
     story.append(Spacer(1, 4))
 
-    # 2. Wklejenie oficjalnej mapy z GEE (jeśli została przekazana)
+    # 2. Obsługa mapy rastrowej (jeśli przekazano bufor obrazu) lub współrzędnych tekstowych
     if map_image_buffer is not None:
         try:
             map_image_buffer.seek(0)
@@ -97,6 +98,10 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             story.append(Spacer(1, 10))
         except Exception as e:
             print(f"Blod wklejania mapy rastrowej do PDF: {e}")
+    elif lat is not None and lon is not None:
+        story.append(Paragraph(f"<b>Lokalizacja:</b> {remove_polish_chars(station_name)} (Lat: {lat}, Lon: {lon})",
+                               normal_style))
+        story.append(Spacer(1, 6))
 
     # 3. Szczegóły i opisy merytoryczne
     if details_dict:
