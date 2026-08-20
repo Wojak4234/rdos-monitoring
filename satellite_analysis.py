@@ -1,6 +1,7 @@
 import ee
 import pandas as pd
 import datetime
+import requests
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -144,15 +145,11 @@ def get_parameter_info(parameter):
     return info.get(parameter, {})
 
 
-# --- NOWE FUNKCJE DLA JAKOŚCI WÓD ---
-
 def get_s2_water_dates(days_back=90):
-    """Pobiera daty względnie bezchmurnych zdjęć S2 dla Zalewu Szczecińskiego."""
     try:
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
-        # Centralny punkt: Zalew Szczeciński / Odra
         point = ee.Geometry.Point([14.4, 53.7])
 
         s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
@@ -173,24 +170,19 @@ def get_s2_water_dates(days_back=90):
 
 
 def get_water_quality_layer(target_date):
-    """Generuje warstwę chlorofilu-a (NDCI) z maską wycinającą ląd."""
     try:
         start = ee.Date(target_date)
         end = start.advance(1, 'day')
         point = ee.Geometry.Point([14.4, 53.7])
 
-        # Mosaikujemy, aby uniknąć cięć między kafelkami satelity tego samego dnia
         img = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
             .filterBounds(point) \
             .filterDate(start, end) \
             .mosaic()
 
-        # Krok 1: Definiujemy wodę (NDWI)
         ndwi = img.normalizedDifference(['B3', 'B8'])
-        water_mask = ndwi.gt(0.1)  # Piksele > 0.1 to na 99% woda
+        water_mask = ndwi.gt(0.1)
 
-        # Krok 2: Obliczamy NDCI (chlorofil) i nakładamy maskę wodną
-        # NDCI formuła: (B5 - B4) / (B5 + B4)
         ndci = img.normalizedDifference(['B5', 'B4']).updateMask(water_mask)
 
         min_val = -0.1
@@ -201,3 +193,32 @@ def get_water_quality_layer(target_date):
         return map_id_dict['tile_fetcher'].url_format, min_val, max_val
     except Exception as e:
         raise Exception(f"Błąd GEE (Water Quality): {str(e)}")
+
+
+def get_osm_data(lat, lon, radius, feature_type):
+    """Pobiera wektory z OpenStreetMap na podstawie promienia i typu obiektu."""
+    try:
+        # Mapowanie wyboru z UI na zapytania w języku Overpass QL
+        tags = {
+            "Pomniki przyrody": 'nwr["denotation"="natural_monument"]',
+            "Rezerwaty przyrody": 'nwr["boundary"="protected_area"]["protect_class"="4"]',
+            "Użytki ekologiczne": 'nwr["boundary"="protected_area"]["protect_class"="6"]',
+            "Przejścia dla zwierząt (ekodukty)": 'nwr["bridge"="ecoduct"]'
+        }
+        tag = tags.get(feature_type, 'nwr["denotation"="natural_monument"]')
+
+        # [out:json] mówi bazie, by oddała dane, a 'out geom' od razu zwraca geometrię bez kombinowania
+        query = f"""
+        [out:json][timeout:25];
+        (
+          {tag}(around:{radius},{lat},{lon});
+        );
+        out geom;
+        """
+
+        url = "https://overpass-api.de/api/interpreter"
+        response = requests.post(url, data={'data': query})
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")

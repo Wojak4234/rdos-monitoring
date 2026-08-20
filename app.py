@@ -1,6 +1,7 @@
 import streamlit as st
 import folium
 import pandas as pd
+import json
 import branca.colormap as cm
 from streamlit_folium import st_folium
 from shapely.geometry import shape
@@ -13,7 +14,8 @@ from satellite_analysis import (
     get_available_dates,
     get_parameter_info,
     get_s2_water_dates,
-    get_water_quality_layer
+    get_water_quality_layer,
+    get_osm_data
 )
 
 st.set_page_config(layout="wide")
@@ -28,7 +30,12 @@ if init_gee():
     if data_plb and data_plh:
         modul = st.sidebar.radio(
             "Wybierz moduł analizy:",
-            ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (S5P)", "Jakość Wód (Chlorofil-a)")
+            (
+                "Obszary Natura 2000 (Wskaźniki)",
+                "Zanieczyszczenie powietrza (S5P)",
+                "Jakość Wód (Chlorofil-a)",
+                "Dane wektorowe (OSM)"
+            )
         )
 
         # ---------------- MODUŁ 1: NATURA 2000 ----------------
@@ -192,7 +199,6 @@ if init_gee():
                             tile_url, min_val, max_val = get_water_quality_layer(selected_water_date)
 
                             if tile_url:
-                                # Startujemy wycentrowani idealnie na Zalew Szczeciński
                                 m_water = folium.Map(location=[53.7, 14.4], zoom_start=10)
 
                                 folium.TileLayer(
@@ -201,7 +207,7 @@ if init_gee():
                                     name="Chlorofil-a (NDCI)",
                                     overlay=True,
                                     control=True,
-                                    opacity=0.9  # Duża widoczność, bo woda to mały procent mapy
+                                    opacity=0.9
                                 ).add_to(m_water)
 
                                 colormap = cm.LinearColormap(
@@ -220,5 +226,99 @@ if init_gee():
                             st.error(f"Wystąpił błąd podczas analizy obrazu wodnego: {e}")
             else:
                 st.warning("Nie znaleziono bezchmurnych zdjęć dla tego obszaru w ciągu ostatnich 90 dni.")
+
+        # ---------------- MODUŁ 4: DANE WEKTOROWE (OSM) ----------------
+        elif modul == "Dane wektorowe (OSM)":
+            st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
+            st.markdown(
+                "Wybierz obszar Natura 2000, który posłuży jako centrum wyszukiwania, a następnie określ, jakich obiektów szukasz w jego pobliżu.")
+
+            typ_osm = st.radio("Z jakiej bazy wybieramy obszar referencyjny?", ("PLB (Ptaki)", "PLH (Siedliska)"))
+            active_data_osm = data_plb if "PLB" in typ_osm else data_plh
+
+            names_osm = [
+                f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
+                for f in active_data_osm["features"]
+            ]
+            wybrany_osm = st.selectbox("Wybierz obszar Natura 2000 jako centrum poszukiwań:",
+                                       sorted(list(set(names_osm))))
+
+            feat_osm = next(
+                f for f in active_data_osm["features"]
+                if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany_osm
+            )
+
+            # Pobieramy środek wielokąta
+            geom_osm = shape(feat_osm["geometry"])
+            center_lat = geom_osm.centroid.y
+            center_lon = geom_osm.centroid.x
+
+            col1, col2 = st.columns(2)
+            with col1:
+                promien = st.slider("Promień poszukiwań wokół obszaru (w metrach):", min_value=1000, max_value=20000,
+                                    value=5000, step=1000)
+            with col2:
+                kategoria_osm = st.selectbox(
+                    "Czego szukamy?",
+                    ("Pomniki przyrody", "Rezerwaty przyrody", "Użytki ekologiczne",
+                     "Przejścia dla zwierząt (ekodukty)")
+                )
+
+            if st.button("Szukaj w bazie OSM"):
+                with st.spinner(f"Wysyłam zapytanie do serwerów Overpass API (Promień: {promien}m)..."):
+                    try:
+                        osm_results = get_osm_data(center_lat, center_lon, promien, kategoria_osm)
+                        elements = osm_results.get("elements", [])
+
+                        m_osm = folium.Map(location=[center_lat, center_lon], zoom_start=11)
+
+                        # Wizualizacja centralnego obszaru referencyjnego
+                        folium.GeoJson(
+                            feat_osm,
+                            style_function=lambda x: {'color': 'gray', 'fillOpacity': 0.1, 'weight': 2}
+                        ).add_to(m_osm)
+
+                        # Rysowanie niebieskiego okręgu symbolizującego strefę buforową
+                        folium.Circle(
+                            location=[center_lat, center_lon],
+                            radius=promien,
+                            color='blue',
+                            fill=True,
+                            fill_opacity=0.05
+                        ).add_to(m_osm)
+
+                        # Rysowanie pobranych wyników z bazy na mapie
+                        if elements:
+                            for el in elements:
+                                name = el.get("tags", {}).get("name", "Brak nazwy w bazie")
+
+                                if el["type"] == "node":
+                                    lat, lon = el["lat"], el["lon"]
+                                    folium.Marker([lat, lon], tooltip=name,
+                                                  icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
+
+                                elif el["type"] in ["way", "relation"] and "geometry" in el:
+                                    coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
+                                        m_osm)
+
+                            st.success(f"Sukces! Znaleziono obiektów w tym promieniu: {len(elements)}")
+                        else:
+                            st.warning("Nie znaleziono żadnych obiektów tej kategorii w podanym promieniu.")
+
+                        st_folium(m_osm, width=1100, height=600, returned_objects=[])
+
+                        # Przycisk do eksportu wyciągniętych danych
+                        if elements:
+                            json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
+                            st.download_button(
+                                label="📥 Pobierz znalezione wektory jako surowy JSON",
+                                data=json_string.encode('utf-8'),
+                                file_name=f"osm_wyniki_{kategoria_osm.replace(' ', '_')}.json",
+                                mime="application/json"
+                            )
+
+                    except Exception as e:
+                        st.error(f"Wystąpił błąd podczas pobierania danych przestrzennych: {e}")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
