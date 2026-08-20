@@ -62,13 +62,18 @@ def get_atmospheric_no2_layer(start_date, end_date):
             .select('tropospheric_NO2_column_number_density') \
             .mean()
 
+        # MAGIA GIS: Zostawiamy tylko podwyższone wartości (maskujemy tło/czyste powietrze)
+        threshold = 0.000045
+        s5p_high = s5p.updateMask(s5p.gt(threshold))
+
+        # Zmieniona paleta - zaczynamy od żółtego, bo niebieskie/czyste obszary są usunięte
         no2_viz = {
-            'min': 0,
-            'max': 0.0002,
-            'palette': ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+            'min': 0.000045,
+            'max': 0.00015,
+            'palette': ['yellow', 'orange', 'red', 'purple']
         }
 
-        map_id_dict = s5p.getMapId(no2_viz)
+        map_id_dict = s5p_high.getMapId(no2_viz)
         return map_id_dict['tile_fetcher'].url_format
     except Exception as e:
         print(f"Błąd pobierania warstwy S5P: {e}")
