@@ -19,6 +19,7 @@ from gee_processor import (
     calculate_index_time_series, get_atmospheric_layer, get_available_dates,
     get_s2_water_dates, get_water_quality_layer
 )
+from report_generator import generate_general_pdf_report
 
 st.set_page_config(layout="wide")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
@@ -87,13 +88,28 @@ if init_gee():
                 st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
                 st.line_chart(st.session_state["df_ts"])
 
-                csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
-                st.download_button(
-                    label="📥 Pobierz dane wykresu do CSV",
-                    data=csv_data,
-                    file_name=f"analiza_{selected_index.split()[0]}_{wybrany}.csv",
-                    mime="text/csv",
-                )
+                col_csv, col_pdf = st.columns(2)
+                with col_csv:
+                    csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
+                    st.download_button(
+                        label="📥 Pobierz dane do CSV",
+                        data=csv_data,
+                        file_name=f"analiza_{selected_index.split()[0]}_{wybrany}.csv",
+                        mime="text/csv",
+                    )
+                with col_pdf:
+                    pdf_bytes = generate_general_pdf_report(
+                        title="Analiza Wskaźnika Satelitarnego",
+                        subtitle=f"Obszar: {wybrany} ({typ})",
+                        df_data=st.session_state["df_ts"],
+                        details_dict={"Wskaźnik": selected_index, "Okres": f"{start_date} do {end_date}"}
+                    )
+                    st.download_button(
+                        label="📥 Pobierz raport PDF",
+                        data=pdf_bytes,
+                        file_name=f"raport_{selected_index.split()[0]}_{wybrany}.pdf",
+                        mime="application/pdf"
+                    )
             elif st.session_state.get("df_ts") is not None and st.session_state["df_ts"].empty:
                 st.warning("Brak danych satelitarnych w wybranym przedziale. Spróbuj rozszerzyć zakres dat.")
 
@@ -160,6 +176,20 @@ if init_gee():
                                         st.markdown(
                                             f"**Jak interpretować wartości na mapie?**<br>{param_info['normy']}",
                                             unsafe_allow_html=True)
+
+                                # Przycisk raportu PDF dla atmosfery S5P
+                                pdf_bytes = generate_general_pdf_report(
+                                    title="Raport Zanieczyszczeń Atmosferycznych (Sentinel-5P)",
+                                    subtitle=f"Parametr: {selected_param} | Data: {selected_date_str}",
+                                    details_dict={"Opis": param_info.get('opis', ''),
+                                                  "Normy": param_info.get('normy', '')}
+                                )
+                                st.download_button(
+                                    label="📥 Pobierz podsumowanie PDF",
+                                    data=pdf_bytes,
+                                    file_name=f"raport_atmosfera_{selected_param.split()[0]}_{selected_date_str}.pdf",
+                                    mime="application/pdf"
+                                )
                             else:
                                 st.error("Nie udało się pobrać warstwy.")
                         except Exception as e:
@@ -230,7 +260,6 @@ if init_gee():
                 if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
                     with st.spinner("Pobieram pełne dane historyczne..."):
                         sel_s = station_dict[selected_station]
-                        # Zapisujemy historię w session_state, aby nie znikała przy zmianie checkboxów!
                         st.session_state["df_hist"] = get_historical_air_quality(float(sel_s['gegrLat']),
                                                                                  float(sel_s['gegrLon']), past_days=3)
 
@@ -238,7 +267,6 @@ if init_gee():
                 if df_hist is not None and not df_hist.empty:
                     st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
 
-                    # --- SEKCJA CHECKBOXÓW (MULTICHOICE) ---
                     dostepne_kolumny = df_hist.columns.tolist()
                     wybrane_parametry = st.multiselect(
                         "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
@@ -252,11 +280,10 @@ if init_gee():
                         df_filtered = df_hist[wybrane_parametry]
                         st.line_chart(df_filtered)
 
-                        # --- ROZWIJANA LEGENDA Z NORMAMI ---
                         with st.expander("📖 Legenda i normy jakości powietrza (Standardy / WHO)"):
                             st.markdown("""
                             * **PM10**: Norma dobowa wynosi **50 µg/m³** (dopuszczalne 35 przekroczeń w roku). Norma roczna to **40 µg/m³**.
-                            * **PM2.5**: Norma roczna wynosi **20 µg/m³** (wytyczne WHO zalecają znacznie ostrzejszy poziom **5 µg/m³**).
+                            * **PM2.5**: Norma roczna wynosi **20 µg/m³** (wytyczne WHO zalecają ostrzejszy poziom **5 µg/m³**).
                             * **NO2 (Dwutlenek azotu)**: Średnia roczna norma to **40 µg/m³**, a średnia godzinowa **200 µg/m³**.
                             * **SO2 (Dwutlenek siarki)**: Średnia dobowa norma to **125 µg/m³**, a godzinowa **350 µg/m³**.
                             * **Ozon (O3)**: Poziom docelowy dla ochrony zdrowia (maksymalne średnie stężenie 8-godzinne): **120 µg/m³**.
@@ -268,13 +295,27 @@ if init_gee():
                         display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
                         st.dataframe(display_df, use_container_width=True)
 
-                        csv_hist = display_df.to_csv().encode('utf-8')
-                        st.download_button(
-                            label="📥 Pobierz zaznaczone wyniki do CSV",
-                            data=csv_hist,
-                            file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
-                            mime="text/csv"
-                        )
+                        col_csv, col_pdf = st.columns(2)
+                        with col_csv:
+                            csv_hist = display_df.to_csv().encode('utf-8')
+                            st.download_button(
+                                label="📥 Pobierz wyniki do CSV",
+                                data=csv_hist,
+                                file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
+                                mime="text/csv"
+                            )
+                        with col_pdf:
+                            pdf_bytes = generate_general_pdf_report(
+                                title="Raport Pomiary Naziemne (GIOŚ / Copernicus)",
+                                subtitle=f"Stacja pomiarowa: {selected_station}",
+                                df_data=df_filtered
+                            )
+                            st.download_button(
+                                label="📥 Pobierz oficjalny raport PDF",
+                                data=pdf_bytes,
+                                file_name=f"raport_{selected_station.replace(' ', '_')}.pdf",
+                                mime="application/pdf"
+                            )
                     else:
                         st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
 
@@ -318,6 +359,19 @@ if init_gee():
 
                                 st.success("Wygenerowano mapę chlorofilu!")
                                 st_folium(m_water, width=1100, height=600, returned_objects=[])
+
+                                pdf_bytes = generate_general_pdf_report(
+                                    title="Raport Jakości Wód (Sentinel-2 NDCI)",
+                                    subtitle=f"Obszar: Odra i Zalew Szczeciński | Data: {selected_water_date}",
+                                    details_dict={"Wskaźnik": "NDCI (Chlorofil-a)",
+                                                  "Skala": "Ciemnoniebieski = woda czysta, Żółty/Czerwony = zakwity"}
+                                )
+                                st.download_button(
+                                    label="📥 Pobierz raport PDF (Jakość Wód)",
+                                    data=pdf_bytes,
+                                    file_name=f"raport_jakosc_wod_{selected_water_date}.pdf",
+                                    mime="application/pdf"
+                                )
                         except Exception as e:
                             st.error(f"Błąd analizy: {e}")
             else:
@@ -405,12 +459,39 @@ if init_gee():
                         if filtered_elements:
                             osm_results["elements"] = filtered_elements
                             json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
-                            st.download_button(
-                                label="📥 Pobierz znalezione wektory jako JSON",
-                                data=json_string.encode('utf-8'),
-                                file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
-                                mime="application/json"
-                            )
+
+                            # Przygotowanie danych do tabeli w raporcie PDF OSM
+                            osm_rows = []
+                            for el in filtered_elements:
+                                osm_rows.append({
+                                    "Typ elementu": el["type"],
+                                    "ID": el.get("id"),
+                                    "Nazwa": el.get("tags", {}).get("name", "Brak nazwy")
+                                })
+                            df_osm_summary = pd.DataFrame(osm_rows)
+
+                            col_json, col_pdf = st.columns(2)
+                            with col_json:
+                                st.download_button(
+                                    label="📥 Pobierz wektory jako JSON",
+                                    data=json_string.encode('utf-8'),
+                                    file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
+                                    mime="application/json"
+                                )
+                            with col_pdf:
+                                pdf_bytes = generate_general_pdf_report(
+                                    title="Raport Obiektów Wektorowych (OpenStreetMap)",
+                                    subtitle=f"Obszar Natura 2000: {wybrany_osm} | Kategoria: {kategoria_osm}",
+                                    df_data=df_osm_summary,
+                                    details_dict={"Bufer": f"{promien} metrów",
+                                                  "Liczba znalezionych obiektów": len(filtered_elements)}
+                                )
+                                st.download_button(
+                                    label="📥 Pobierz raport PDF (OSM)",
+                                    data=pdf_bytes,
+                                    file_name=f"raport_osm_{kategoria_osm.replace(' ', '_')}.pdf",
+                                    mime="application/pdf"
+                                )
                     except Exception as e:
                         st.error(f"Błąd: {e}")
     else:
