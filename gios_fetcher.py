@@ -80,7 +80,9 @@ def get_gios_aqi(station_id, lat=None, lon=None):
 
 
 def get_historical_air_quality(lat, lon, past_days=3):
-    url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=pm10,pm2_5,nitrogen_dioxide,ozone&past_days={past_days}"
+    """Pobiera pełen zestaw historycznych parametrów z modelu Copernicus."""
+    variables = "pm10,pm2_5,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust,ammonia"
+    url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly={variables}&past_days={past_days}"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
@@ -91,9 +93,13 @@ def get_historical_air_quality(lat, lon, past_days=3):
                 'pm10': 'PM10 (µg/m³)',
                 'pm2_5': 'PM2.5 (µg/m³)',
                 'nitrogen_dioxide': 'NO2 (µg/m³)',
-                'ozone': 'Ozon (µg/m³)'
+                'ozone': 'Ozon (µg/m³)',
+                'sulphur_dioxide': 'SO2 (µg/m³)',
+                'carbon_monoxide': 'CO (µg/m³)',
+                'dust': 'Pył pustynny / Pyły (µg/m³)',
+                'ammonia': 'Amoniak (µg/m³)'
             }, inplace=True)
-            return df.dropna()
+            return df.dropna(how='all')
     except:
         pass
     return None

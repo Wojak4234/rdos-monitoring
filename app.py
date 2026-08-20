@@ -9,6 +9,7 @@ from streamlit_folium import st_folium
 from shapely.ops import transform
 from shapely.geometry import shape, Point, LineString, mapping
 import json
+
 from gee_auth import init_gee
 from data_loader import load_data
 from metadata_utils import get_parameter_info
@@ -225,24 +226,41 @@ if init_gee():
                 selected_station = st.selectbox("Wybierz stację z mapy:", list(station_dict.keys()))
 
                 if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
-                    with st.spinner("Pobieram dane historyczne..."):
+                    with st.spinner("Pobieram pełne dane historyczne..."):
                         sel_s = station_dict[selected_station]
                         df_hist = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']),
                                                              past_days=3)
+
                         if df_hist is not None and not df_hist.empty:
                             st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
-                            st.line_chart(df_hist)
-                            display_df = df_hist.tail(24).iloc[::-1]
-                            display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
-                            st.dataframe(display_df, use_container_width=True)
 
-                            csv_hist = display_df.to_csv().encode('utf-8')
-                            st.download_button(
-                                label="📥 Pobierz wyniki historyczne do CSV",
-                                data=csv_hist,
-                                file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
-                                mime="text/csv"
+                            # --- SEKCJA CHECKBOXÓW (MULTICHOICE) ---
+                            dostepne_kolumny = df_hist.columns.tolist()
+                            wybrane_parametry = st.multiselect(
+                                "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
+                                options=dostepne_kolumny,
+                                default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
+                                         col in dostepne_kolumny]
                             )
+
+                            if wybrane_parametry:
+                                df_filtered = df_hist[wybrane_parametry]
+                                st.line_chart(df_filtered)
+
+                                st.markdown("#### Tabela wyników (Najnowsze na górze)")
+                                display_df = df_filtered.tail(24).iloc[::-1]
+                                display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
+                                st.dataframe(display_df, use_container_width=True)
+
+                                csv_hist = display_df.to_csv().encode('utf-8')
+                                st.download_button(
+                                    label="📥 Pobierz zaznaczone wyniki do CSV",
+                                    data=csv_hist,
+                                    file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
+                                    mime="text/csv"
+                                )
+                            else:
+                                st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
                         else:
                             st.error("Brak danych historycznych.")
 
@@ -331,7 +349,7 @@ if init_gee():
                         buffered_4326 = transform(project_to_4326, buffered_2180)
 
                         min_lon, min_lat, max_lon, max_lat = buffered_4326.bounds
-                        osm_results = get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, kategoria_osm)
+                        osm_results = get_osm_data_bbox(min_lat, min_lon, max_lon, max_lat, kategoria_osm)
                         elements = osm_results.get("elements", [])
 
                         filtered_elements = []
@@ -381,5 +399,5 @@ if init_gee():
                             )
                     except Exception as e:
                         st.error(f"Błąd: {e}")
-            else:
-                st.error("Brak plików GeoJSON (PLB.geojson, PLH.geojson) w folderze głównym projektu!")
+    else:
+        st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
