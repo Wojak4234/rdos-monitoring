@@ -173,6 +173,8 @@ if init_gee():
             st.header("📍 Pomiary naziemne jakości powietrza (API GIOŚ / Copernicus)")
             if "gios_stations" not in st.session_state:
                 st.session_state["gios_stations"] = []
+            if "df_hist" not in st.session_state:
+                st.session_state["df_hist"] = None
 
             if st.button("Pobierz / Odśwież dane na mapie"):
                 with st.spinner("Odpytuję serwery pomiarowe..."):
@@ -228,41 +230,53 @@ if init_gee():
                 if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
                     with st.spinner("Pobieram pełne dane historyczne..."):
                         sel_s = station_dict[selected_station]
-                        df_hist = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']),
-                                                             past_days=3)
+                        # Zapisujemy historię w session_state, aby nie znikała przy zmianie checkboxów!
+                        st.session_state["df_hist"] = get_historical_air_quality(float(sel_s['gegrLat']),
+                                                                                 float(sel_s['gegrLon']), past_days=3)
 
-                        if df_hist is not None and not df_hist.empty:
-                            st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
+                df_hist = st.session_state.get("df_hist", None)
+                if df_hist is not None and not df_hist.empty:
+                    st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
 
-                            # --- SEKCJA CHECKBOXÓW (MULTICHOICE) ---
-                            dostepne_kolumny = df_hist.columns.tolist()
-                            wybrane_parametry = st.multiselect(
-                                "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
-                                options=dostepne_kolumny,
-                                default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
-                                         col in dostepne_kolumny]
-                            )
+                    # --- SEKCJA CHECKBOXÓW (MULTICHOICE) ---
+                    dostepne_kolumny = df_hist.columns.tolist()
+                    wybrane_parametry = st.multiselect(
+                        "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
+                        options=dostepne_kolumny,
+                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
+                                 col in dostepne_kolumny],
+                        key="gios_param_select"
+                    )
 
-                            if wybrane_parametry:
-                                df_filtered = df_hist[wybrane_parametry]
-                                st.line_chart(df_filtered)
+                    if wybrane_parametry:
+                        df_filtered = df_hist[wybrane_parametry]
+                        st.line_chart(df_filtered)
 
-                                st.markdown("#### Tabela wyników (Najnowsze na górze)")
-                                display_df = df_filtered.tail(24).iloc[::-1]
-                                display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
-                                st.dataframe(display_df, use_container_width=True)
+                        # --- ROZWIJANA LEGENDA Z NORMAMI ---
+                        with st.expander("📖 Legenda i normy jakości powietrza (Standardy / WHO)"):
+                            st.markdown("""
+                            * **PM10**: Norma dobowa wynosi **50 µg/m³** (dopuszczalne 35 przekroczeń w roku). Norma roczna to **40 µg/m³**.
+                            * **PM2.5**: Norma roczna wynosi **20 µg/m³** (wytyczne WHO zalecają znacznie ostrzejszy poziom **5 µg/m³**).
+                            * **NO2 (Dwutlenek azotu)**: Średnia roczna norma to **40 µg/m³**, a średnia godzinowa **200 µg/m³**.
+                            * **SO2 (Dwutlenek siarki)**: Średnia dobowa norma to **125 µg/m³**, a godzinowa **350 µg/m³**.
+                            * **Ozon (O3)**: Poziom docelowy dla ochrony zdrowia (maksymalne średnie stężenie 8-godzinne): **120 µg/m³**.
+                            * **CO (Tlenek węgla)**: Maksymalne średnie stężenie 8-godzinne wynosi **10 mg/m³** (10000 µg/m³).
+                            """)
 
-                                csv_hist = display_df.to_csv().encode('utf-8')
-                                st.download_button(
-                                    label="📥 Pobierz zaznaczone wyniki do CSV",
-                                    data=csv_hist,
-                                    file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
-                                    mime="text/csv"
-                                )
-                            else:
-                                st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
-                        else:
-                            st.error("Brak danych historycznych.")
+                        st.markdown("#### Tabela wyników (Najnowsze na górze)")
+                        display_df = df_filtered.tail(24).iloc[::-1]
+                        display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
+                        st.dataframe(display_df, use_container_width=True)
+
+                        csv_hist = display_df.to_csv().encode('utf-8')
+                        st.download_button(
+                            label="📥 Pobierz zaznaczone wyniki do CSV",
+                            data=csv_hist,
+                            file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
 
         # ---------------- MODUŁ 4: JAKOŚĆ WÓD ----------------
         elif modul == "Jakość Wód (Chlorofil-a)":
