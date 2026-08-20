@@ -228,20 +228,20 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (Dodane Nagłówki i HTTPS) ---
+# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (Dodano tunelowanie przez bramkę AllOrigins) ---
 
 def get_gios_stations():
-    """Pobiera listę stacji pomiarowych GIOŚ z Polski i filtruje woj. zachodniopomorskie."""
+    """Pobiera listę stacji pomiarowych GIOŚ przez bramkę Proxy."""
     try:
-        url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
+        # Prawdziwy adres GIOŚ ukrywamy za bramką proxy, żeby ominąć blokadę IP Streamlita
+        target_url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
+        proxy_url = f"https://api.allorigins.win/raw?url={target_url}"
 
-        # Magiczny nagłówek udający prawdziwą przeglądarkę
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
         }
 
-        response = requests.get(url, headers=headers)
+        response = requests.get(proxy_url, headers=headers, timeout=15)
         response.raise_for_status()
         stations = response.json()
 
@@ -252,20 +252,20 @@ def get_gios_stations():
                     zachodniopomorskie_stations.append(s)
         return zachodniopomorskie_stations
     except Exception as e:
-        raise Exception(f"Błąd komunikacji z API GIOŚ (Stacje): {e}")
+        raise Exception(f"Błąd komunikacji z proxy API GIOŚ (Stacje): {e}")
 
 
 def get_gios_aqi(station_id):
-    """Odpytuje konkretną stację o aktualny Indeks Jakości Powietrza."""
+    """Odpytuje konkretną stację przez bramkę Proxy."""
     try:
-        url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
+        target_url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
+        proxy_url = f"https://api.allorigins.win/raw?url={target_url}"
 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
         }
 
-        response = requests.get(url, headers=headers)
+        response = requests.get(proxy_url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
 
