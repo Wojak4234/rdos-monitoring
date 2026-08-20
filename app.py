@@ -135,4 +135,4 @@ if init_gee():
             else:
                 st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
     else:
-        st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
+        st.error("Upewnij się, że pliki PLB.geojson, PLH.geojson znajdują się w folderze głównym projektu!")
