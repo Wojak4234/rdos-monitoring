@@ -90,7 +90,6 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
         spaceAfter=4
     )
 
-    # Czyszczenie tytułu i podtytułu z polskich znaków
     clean_title = remove_polish_chars(title)
     clean_subtitle = remove_polish_chars(subtitle)
 
@@ -105,15 +104,13 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             story.append(Paragraph(f"<b>{ck}:</b> {cv}", normal_style))
         story.append(Spacer(1, 6))
 
-    # Przetwarzanie DataFrame (średnie godzinne i generowanie wykresu)
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
 
-        # Agregacja do średnich godzinnych, jeśli indeks to daty
+        # Poprawka: użycie małej litery 'h' zamiast 'H' zgodnie z nowym standardem Pandas
         if isinstance(df_processed.index, pd.DatetimeIndex):
-            df_processed = df_processed.resample('H').mean().dropna(how='all')
+            df_processed = df_processed.resample('h').mean().dropna(how='all')
 
-        # Dodawanie wykresu do PDF
         try:
             img_buf = create_chart_image(df_processed)
             story.append(Image(img_buf, width=450, height=200))
@@ -121,13 +118,11 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
         except Exception as e:
             print(f"Blod generowania wykresu do PDF: {e}")
 
-        # Przygotowanie danych do tabeli
         df_table = df_processed.copy()
         df_table.reset_index(inplace=True)
         date_col = df_table.columns[0]
         df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%Y-%m-%d %H:00')
 
-        # Zmiana nazw kolumn na wersje bez polskich znaków
         new_columns = [remove_polish_chars(col) for col in df_table.columns]
         df_table.columns = new_columns
 
