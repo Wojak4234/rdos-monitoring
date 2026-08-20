@@ -54,7 +54,6 @@ def get_available_dates(parameter, days_back=90):
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
-        # NAPRAWA: Użycie ee.Date() zamiast surowych stringów
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
             .filterDate(ee.Date(str(start_date)), ee.Date(str(end_date))) \
             .filterBounds(point)
@@ -82,7 +81,16 @@ def get_atmospheric_layer(target_date, parameter):
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}').filterDate(start, end).select(band).mean()
         s5p_high = s5p.updateMask(s5p.gt(threshold))
         viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
-        return s5p_high.getMapId(viz)['tile_fetcher'].url_format, threshold, max_val
+
+        # Ramka na województwo zachodniopomorskie do PDF
+        region = ee.Geometry.Rectangle([14.0, 52.6, 17.0, 54.6])
+        thumb_url = s5p_high.getThumbURL({
+            'min': threshold, 'max': max_val,
+            'palette': ['yellow', 'orange', 'red', 'purple'],
+            'region': region, 'dimensions': 800, 'format': 'png'
+        })
+
+        return s5p_high.getMapId(viz)['tile_fetcher'].url_format, threshold, max_val, thumb_url
     except Exception as e:
         raise Exception(f"Błąd GEE: {e}")
 
@@ -93,7 +101,6 @@ def get_s2_water_dates(days_back=90):
         start_date = end_date - datetime.timedelta(days=days_back)
         point = ee.Geometry.Point([14.4, 53.7])
 
-        # Poprawka również tutaj dla spójności
         s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
             .filterBounds(point) \
             .filterDate(ee.Date(str(start_date)), ee.Date(str(end_date))) \
@@ -120,6 +127,15 @@ def get_water_quality_layer(target_date):
         min_val = -0.1
         max_val = 0.2
         viz = {'min': min_val, 'max': max_val, 'palette': ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red']}
-        return ndci.getMapId(viz)['tile_fetcher'].url_format, min_val, max_val
+
+        # Ramka wycentrowana wokół Zalewu Szczecińskiego i ujścia Odry do PDF
+        region = ee.Geometry.Rectangle([14.1, 53.4, 14.8, 54.0])
+        thumb_url = ndci.getThumbURL({
+            'min': min_val, 'max': max_val,
+            'palette': ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red'],
+            'region': region, 'dimensions': 800, 'format': 'png'
+        })
+
+        return ndci.getMapId(viz)['tile_fetcher'].url_format, min_val, max_val, thumb_url
     except Exception as e:
         raise Exception(f"Błąd GEE (Water Quality): {e}")

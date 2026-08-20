@@ -25,15 +25,14 @@ from gee_processor import (
 from report_generator import generate_general_pdf_report
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
-
 custom_style_and_footer = """
 <style>
-/* Ukrycie standardowego menu i stopki */
+/* Ukrycie TYLKO prawego menu i przycisku Deploy w nagłówku, aby strzałka panelu bocznego ocalała */
+header [data-testid="stAppDeployButton"] {display: none !important;}
 #MainMenu {visibility: hidden;}
-header {visibility: hidden;}
 footer {visibility: hidden;}
 
-/* Agresywne ukrywanie wszystkiego w prawym dolnym rogu (w tym ramek iframe wstrzykiwanych przez Streamlit Cloud) */
+/* Agresywne ukrywanie wszystkiego w prawym dolnym rogu */
 iframe[src*="badge"] {display: none !important;}
 iframe[title*="Streamlit"] {display: none !important;}
 div[style*="position: fixed"][style*="bottom:"][style*="right:"] {display: none !important; opacity: 0 !important; pointer-events: none !important;}
@@ -60,7 +59,6 @@ div[style*="position: fixed"][style*="bottom:"][style*="right:"] {display: none 
     Wykonano na potrzeby RDOŚ Monitoring | Wykonał: Wojciech Świątek
 </div>
 """
-st.markdown(custom_style_and_footer, unsafe_allow_html=True)
 
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
