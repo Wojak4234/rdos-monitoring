@@ -10,6 +10,8 @@ from shapely.ops import transform
 from shapely.geometry import shape, Point, LineString, mapping
 import json
 import datetime
+import requests
+import io
 
 from gee_auth import init_gee
 from data_loader import load_data
@@ -23,14 +25,21 @@ from gee_processor import (
 from report_generator import generate_general_pdf_report
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
+
 custom_style_and_footer = """
 <style>
-/* Ukrycie standardowego nagłówka, menu i domyślnej stopki */
+/* Ukrycie standardowego menu i stopki */
 #MainMenu {visibility: hidden;}
 header {visibility: hidden;}
 footer {visibility: hidden;}
 
-/* Stylizacja Twojej autorskiej stopki */
+/* Agresywne ukrywanie wszystkiego w prawym dolnym rogu (w tym ramek iframe wstrzykiwanych przez Streamlit Cloud) */
+iframe[src*="badge"] {display: none !important;}
+iframe[title*="Streamlit"] {display: none !important;}
+div[style*="position: fixed"][style*="bottom:"][style*="right:"] {display: none !important; opacity: 0 !important; pointer-events: none !important;}
+.viewerBadge_container {display: none !important;}
+
+/* Twoja autorska stopka */
 .footer-custom {
     position: fixed;
     left: 0;
@@ -45,9 +54,6 @@ footer {visibility: hidden;}
     border-top: 1px solid #e9ecef;
     z-index: 999999;
 }
-
-/* Próba przykrycia/ukrycia prawego rogu na wypadek, gdyby ktoś go widział */
-.viewerBadge_container {display: none !important;}
 </style>
 
 <div class="footer-custom">
@@ -55,6 +61,7 @@ footer {visibility: hidden;}
 </div>
 """
 st.markdown(custom_style_and_footer, unsafe_allow_html=True)
+
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
 if init_gee():
@@ -190,7 +197,14 @@ if init_gee():
                 if st.button("Generuj mapę zanieczyszczeń"):
                     with st.spinner(f"Przetwarzanie mapy {selected_param} dla daty {selected_date_str}..."):
                         try:
-                            tile_url, min_val, max_val = get_atmospheric_layer(selected_date_str, selected_param)
+                            gee_result = get_atmospheric_layer(selected_date_str, selected_param)
+
+                            # Uodpornienie na brak miniatury w starym gee_processor.py
+                            if len(gee_result) == 4:
+                                tile_url, min_val, max_val, thumb_url = gee_result
+                            else:
+                                tile_url, min_val, max_val = gee_result
+                                thumb_url = None
 
                             if tile_url:
                                 m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
@@ -212,14 +226,25 @@ if init_gee():
                                 colormap.add_to(m_atm)
                                 folium.LayerControl().add_to(m_atm)
 
-                                st.success(f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
+                                st.success(
+                                    f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
                                 st_folium(m_atm, width=1100, height=600, returned_objects=[])
+
+                                map_buf = None
+                                if thumb_url:
+                                    try:
+                                        resp = requests.get(thumb_url)
+                                        if resp.status_code == 200:
+                                            map_buf = io.BytesIO(resp.content)
+                                    except Exception as e:
+                                        st.warning("Nie udało się pobrać miniatury z GEE.")
 
                                 param_info = get_parameter_info(selected_param)
                                 if param_info:
                                     with st.expander("ℹ️ Jak czytać ten wynik? (Opis i progi ostrzegawcze)"):
                                         st.markdown(f"**Co to jest?**<br>{param_info['opis']}", unsafe_allow_html=True)
-                                        st.markdown(f"**Normy i interpretacja:**<br>{param_info['normy']}", unsafe_allow_html=True)
+                                        st.markdown(f"**Normy i interpretacja:**<br>{param_info['normy']}",
+                                                    unsafe_allow_html=True)
 
                                 pdf_bytes = generate_general_pdf_report(
                                     title=f"Raport Zanieczyszczen Atmosferycznych - {selected_param}",
@@ -229,7 +254,8 @@ if init_gee():
                                         "Opis merytoryczny": param_info.get("opis", ""),
                                         "Normy i progi": param_info.get("normy", "")
                                     },
-                                    lat=53.6, lon=15.6, station_name="Region Zachodniopomorski"
+                                    lat=53.6, lon=15.6, station_name="Region Zachodniopomorski",
+                                    map_image_buffer=map_buf
                                 )
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
@@ -242,7 +268,8 @@ if init_gee():
                         except Exception as e:
                             st.error(f"Wystąpił błąd silnika Earth Engine: {e}")
             else:
-                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
+                st.warning(
+                    "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
 
         # ---------------- MODUŁ 3: STACJE GIOŚ ----------------
         elif modul == "Pomiary naziemne (GIOŚ)":
@@ -277,11 +304,16 @@ if init_gee():
                     calc_date = s['calc_date']
 
                     color = "gray"
-                    if "Bardzo dobry" in aqi_level: color = "darkgreen"
-                    elif "Dobry" in aqi_level: color = "green"
-                    elif "Umiarkowany" in aqi_level: color = "orange"
-                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level: color = "lightred"
-                    elif "Bardzo zły" in aqi_level: color = "red"
+                    if "Bardzo dobry" in aqi_level:
+                        color = "darkgreen"
+                    elif "Dobry" in aqi_level:
+                        color = "green"
+                    elif "Umiarkowany" in aqi_level:
+                        color = "orange"
+                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
+                        color = "lightred"
+                    elif "Bardzo zły" in aqi_level:
+                        color = "red"
 
                     popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
                     folium.Marker(
@@ -301,7 +333,8 @@ if init_gee():
                 if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
                     with st.spinner("Pobieram pełne dane historyczne..."):
                         sel_s = station_dict[selected_station]
-                        df_raw = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']), past_days=3)
+                        df_raw = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']),
+                                                            past_days=3)
                         if df_raw is not None:
                             df_raw = df_raw[df_raw.index <= pd.Timestamp.now()]
                         st.session_state["df_hist"] = df_raw
@@ -314,7 +347,8 @@ if init_gee():
                     wybrane_parametry = st.multiselect(
                         "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
                         options=dostepne_kolumny,
-                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if col in dostepne_kolumny],
+                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
+                                 col in dostepne_kolumny],
                         key="gios_param_select"
                     )
 
@@ -338,7 +372,6 @@ if init_gee():
                         display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
                         st.dataframe(display_df, use_container_width=True)
 
-                        # Panel wyboru zakresu czasu do PDF
                         st.markdown("#### ⚙️ Ustawienia raportu PDF")
                         min_d = df_filtered.index.min().date()
                         max_d = min(df_filtered.index.max().date(), pd.Timestamp.today().date())
@@ -397,7 +430,14 @@ if init_gee():
                 if st.button("Generuj mapę zakwitów"):
                     with st.spinner("Przeliczanie indeksu NDCI..."):
                         try:
-                            tile_url, min_val, max_val = get_water_quality_layer(selected_water_date)
+                            gee_result = get_water_quality_layer(selected_water_date)
+
+                            if len(gee_result) == 4:
+                                tile_url, min_val, max_val, thumb_url = gee_result
+                            else:
+                                tile_url, min_val, max_val = gee_result
+                                thumb_url = None
+
                             if tile_url:
                                 m_water = folium.Map(location=[53.7, 14.4], zoom_start=10)
                                 folium.TileLayer(
@@ -421,6 +461,15 @@ if init_gee():
                                 st.success("Wygenerowano mapę chlorofilu!")
                                 st_folium(m_water, width=1100, height=600, returned_objects=[])
 
+                                map_buf = None
+                                if thumb_url:
+                                    try:
+                                        resp = requests.get(thumb_url)
+                                        if resp.status_code == 200:
+                                            map_buf = io.BytesIO(resp.content)
+                                    except Exception:
+                                        pass
+
                                 info_wody = get_parameter_info("Chlorofil-a (NDCI)")
                                 with st.expander("ℹ️ Interpretacja wskaźnika NDCI (Chlorofil-a)"):
                                     st.markdown(f"**Opis:** {info_wody['opis']}")
@@ -434,7 +483,8 @@ if init_gee():
                                         "Opis merytoryczny": info_wody.get("opis", ""),
                                         "Interpretacja": info_wody.get("normy", "")
                                     },
-                                    lat=53.7, lon=14.4, station_name="Zalew Szczecinski"
+                                    lat=53.7, lon=14.4, station_name="Zalew Szczecinski",
+                                    map_image_buffer=map_buf
                                 )
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
@@ -518,7 +568,8 @@ if init_gee():
                                                   icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
                                 elif el["type"] in ["way", "relation"] and "geometry" in el:
                                     coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
-                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(m_osm)
+                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
+                                        m_osm)
                             st.success(f"Znaleziono obiektów: {len(filtered_elements)}")
                         else:
                             st.warning("Brak obiektów w strefie buforowej.")
