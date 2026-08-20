@@ -97,8 +97,12 @@ if init_gee():
 
             # Jeśli nie mamy dat w pamięci dla tego gazu, pobieramy je
             if st.session_state["available_dates"] is None:
-                with st.spinner("Przeszukuję archiwum GEE w poszukiwaniu dostępnych zdjęć (ostatnie 60 dni)..."):
-                    st.session_state["available_dates"] = get_available_dates(selected_param, days_back=60)
+                with st.spinner("Przeszukuję archiwum GEE w poszukiwaniu dostępnych zdjęć..."):
+                    try:
+                        st.session_state["available_dates"] = get_available_dates(selected_param, days_back=90)
+                    except Exception as e:
+                        st.error(f"Wystąpił problem z połączeniem do serwerów Earth Engine: {e}")
+                        st.session_state["available_dates"] = []
 
             dates = st.session_state["available_dates"]
 
@@ -129,6 +133,6 @@ if init_gee():
                         else:
                             st.error("Wystąpił błąd podczas renderowania mapy dla tego dnia.")
             else:
-                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 60 dni.")
+                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")

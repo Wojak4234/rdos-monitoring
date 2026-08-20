@@ -56,8 +56,7 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
         return None
 
 
-def get_available_dates(parameter, days_back=60):
-    """Przeszukuje bazę GEE i zwraca listę dostępnych dat dla wybranego gazu z ostatnich X dni"""
+def get_available_dates(parameter, days_back=90):  # Zwiększyłem bufor do 90 dni
     try:
         if parameter == "NO2 (Dwutlenek azotu)":
             col = 'L3_NO2'
@@ -70,7 +69,6 @@ def get_available_dates(parameter, days_back=60):
         else:
             return []
 
-        # Liczymy daty: od dzisiaj do 'days_back' dni wstecz
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
@@ -81,21 +79,20 @@ def get_available_dates(parameter, days_back=60):
             .filterDate(str(start_date), str(end_date)) \
             .filterBounds(region)
 
-        # Funkcja wydobywająca daty z metadanych zdjęć
-        def get_date(image):
-            return ee.Feature(None, {'date': image.date().format('YYYY-MM-dd')})
+        # Używamy lekkiej, serwerowej agregacji (pobiera tylko listę liczb całkowitych)
+        times = s5p.aggregate_array('system:time_start').getInfo()
 
-        # Zbieramy dane do lokalnego Pythona i wyciągamy unikalne daty
-        dates_info = s5p.map(get_date).getInfo()
-        valid_dates = set()
-        for feat in dates_info.get('features', []):
-            valid_dates.add(feat['properties']['date'])
+        if not times:
+            return []
 
-        # Zwracamy posortowaną listę (od najnowszych do najstarszych)
-        return sorted(list(valid_dates), reverse=True)
+        # Konwersja czasu z milisekund na daty przy użyciu Pandas (bezbłędne)
+        dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
+        dates.sort(reverse=True)
+        return dates
+
     except Exception as e:
-        print(f"Błąd wyszukiwania dat: {e}")
-        return []
+        # Zamiast chować błąd, wyrzucamy go na zewnątrz
+        raise Exception(f"Błąd GEE: {str(e)}")
 
 
 def get_atmospheric_layer(target_date, parameter):
