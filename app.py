@@ -23,6 +23,22 @@ from gee_processor import (
 from report_generator import generate_general_pdf_report
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
+hide_streamlit_style = """
+<style>
+/* Ukrywa górny pasek narzędzi i przycisk GitHub / Deploy */
+header {visibility: hidden;}
+
+/* Ukrywa menu główne (hamburger menu w prawym górnym rogu) */
+#MainMenu {visibility: hidden;}
+
+/* Ukrywa stopkę "Made with Streamlit" */
+footer {visibility: hidden;}
+
+/* Ukrywa ewentualne badge i odznaki hostingu */
+.viewerBadge_container {display: none !important;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
 if init_gee():
