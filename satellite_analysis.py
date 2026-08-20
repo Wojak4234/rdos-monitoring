@@ -55,25 +55,39 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
         return None
 
 
-def get_atmospheric_no2_layer(start_date, end_date):
+def get_atmospheric_layer(target_date, parameter):
     try:
-        s5p = ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2') \
-            .filterDate(str(start_date), str(end_date)) \
-            .select('tropospheric_NO2_column_number_density') \
-            .mean()
+        # Granice woj. zachodniopomorskiego z bazy FAO
+        region = ee.FeatureCollection("FAO/GAUL/2015/level1") \
+            .filter(ee.Filter.eq('ADM1_NAME', 'Zachodniopomorskie'))
 
-        # MAGIA GIS: Zostawiamy tylko podwyższone wartości (maskujemy tło/czyste powietrze)
-        threshold = 0.000045
+        # Ograniczenie do 1 konkretnego dnia
+        start = ee.Date(target_date)
+        end = start.advance(1, 'day')
+
+        if parameter == "NO2 (Dwutlenek azotu)":
+            col, band, threshold, max_val = 'L3_NO2', 'tropospheric_NO2_column_number_density', 0.00004, 0.00015
+        elif parameter == "SO2 (Dwutlenek siarki)":
+            col, band, threshold, max_val = 'L3_SO2', 'SO2_column_number_density', 0.0001, 0.0005
+        elif parameter == "CO (Tlenek węgla)":
+            col, band, threshold, max_val = 'L3_CO', 'CO_column_number_density', 0.03, 0.05
+        elif parameter == "Aerozole (Smog / Pyły)":
+            col, band, threshold, max_val = 'L3_AER_AI', 'absorbing_aerosol_index', 0.5, 2.0
+        else:
+            return None
+
+        s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
+            .filterDate(start, end) \
+            .filterBounds(region) \
+            .select(band) \
+            .mean() \
+            .clip(region)  # Przycięcie mapy do granic województwa
+
         s5p_high = s5p.updateMask(s5p.gt(threshold))
 
-        # Zmieniona paleta - zaczynamy od żółtego, bo niebieskie/czyste obszary są usunięte
-        no2_viz = {
-            'min': 0.000045,
-            'max': 0.00015,
-            'palette': ['yellow', 'orange', 'red', 'purple']
-        }
+        viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
+        map_id_dict = s5p_high.getMapId(viz)
 
-        map_id_dict = s5p_high.getMapId(no2_viz)
         return map_id_dict['tile_fetcher'].url_format
     except Exception as e:
         print(f"Błąd pobierania warstwy S5P: {e}")

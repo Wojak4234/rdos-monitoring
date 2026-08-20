@@ -6,7 +6,7 @@ from shapely.geometry import shape
 
 from gee_auth import init_gee
 from data_loader import load_data
-from satellite_analysis import calculate_index_time_series, get_atmospheric_no2_layer
+from satellite_analysis import calculate_index_time_series, get_atmospheric_layer
 
 st.set_page_config(layout="wide")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
@@ -19,7 +19,7 @@ if init_gee():
 
     if data_plb and data_plh:
         modul = st.sidebar.radio("Wybierz moduł analizy:",
-                                 ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (NO2)"))
+                                 ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (S5P)"))
 
         if modul == "Obszary Natura 2000 (Wskaźniki)":
             typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
@@ -82,33 +82,41 @@ if init_gee():
             st_folium(m, width=1100, height=500, returned_objects=[])
 
         else:
-            st.header("🏭 Monitoring jakości powietrza i gazów śladowych (Sentinel-5P)")
-            st.markdown("Moduł prezentuje rozkład stężenia dwutlenku azotu ($NO_2$) w troposferze dla obszaru Polski.")
+            st.header("🏭 Monitoring jakości powietrza (Zachodniopomorskie)")
+            st.markdown("Wybierz datę oraz parametr, aby sprawdzić obszary o podwyższonym stężeniu zanieczyszczeń.")
 
-            s_date = st.date_input("Okres od:", value=pd.to_datetime("2026-06-01"))
-            e_date = st.date_input("Okres do:", value=pd.to_datetime("2026-08-19"))
+            col1, col2 = st.columns(2)
+            with col1:
+                selected_date = st.date_input("Wybierz datę zobrazowania:", value=pd.to_datetime("2026-08-15"))
+            with col2:
+                selected_param = st.selectbox(
+                    "Wybierz badany gaz/parametr:",
+                    ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)", "Aerozole (Smog / Pyły)")
+                )
 
-            if st.button("Generuj mapę zanieczyszczeń NO2"):
-                with st.spinner("Przetwarzam warstwę atmosferyczną z chmury GEE..."):
-                    tile_url = get_atmospheric_no2_layer(s_date, e_date)
+            if st.button("Generuj mapę zanieczyszczeń"):
+                with st.spinner(f"Pobieranie danych dla {selected_param}..."):
+                    tile_url = get_atmospheric_layer(str(selected_date), selected_param)
 
                     if tile_url:
-                        m_atm = folium.Map(location=[52.0, 19.0], zoom_start=6)
+                        # Wycentrowanie na środek woj. zachodniopomorskiego
+                        m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
 
                         folium.TileLayer(
                             tiles=tile_url,
-                            attr="Google Earth Engine - Sentinel-5P NO2",
-                            name="Stężenie NO2",
+                            attr="Google Earth Engine - Sentinel-5P",
+                            name=selected_param,
                             overlay=True,
-                            control=True
+                            control=True,
+                            opacity=0.6
                         ).add_to(m_atm)
 
                         folium.LayerControl().add_to(m_atm)
 
-                        st.success("Mapa stężenia dwutlenku azotu została wygenerowana!")
+                        st.success(f"Warstwa {selected_param} została wygenerowana dla województwa!")
                         # TUTAJ RÓWNIEŻ BLOKUJEMY CRASHE
                         st_folium(m_atm, width=1100, height=600, returned_objects=[])
                     else:
-                        st.error("Nie udało się pobrać warstwy atmosferycznej dla wybranego okresu.")
+                        st.error("Brak danych satelitarnych dla tego dnia (satelita mógł nie wykonać pomiaru lub obszar był zakryty grubymi chmurami). Wybierz inną datę.")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
