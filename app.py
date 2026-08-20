@@ -31,50 +31,44 @@ if init_gee():
              "Pomiary naziemne (GIOŚ)", "Jakość Wód (Chlorofil-a)", "Dane wektorowe (OSM)")
         )
 
+        # --- MODUŁ 1: NATURA 2000 ---
         if modul == "Obszary Natura 2000 (Wskaźniki)":
             typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
             active_data = data_plb if "PLB" in typ else data_plh
             names = [f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy" for f in
                      active_data["features"]]
             wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))))
-
             feat = next(f for f in active_data["features"] if
                         (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany)
             geom = shape(feat["geometry"])
+
             m = folium.Map(location=[geom.centroid.y, geom.centroid.x], zoom_start=11)
-            folium.GeoJson(feat,
-                           style_function=lambda x: {'color': 'blue' if "PLB" in typ else 'green', 'fillOpacity': 0.3,
-                                                     'weight': 3}).add_to(m)
+            folium.GeoJson(feat, style_function=lambda x: {'color': 'blue' if "PLB" in typ else 'green',
+                                                           'fillOpacity': 0.3}).add_to(m)
 
-            selected_index = st.sidebar.selectbox("Wskaźnik:", ("NDVI (Wegetacja)", "NDWI (Woda / Mokradła)",
-                                                                "NDMI (Wilgotność roślin)"))
-            start_date = st.sidebar.date_input("Data początkowa", value=pd.to_datetime("2025-01-01"))
-            end_date = st.sidebar.date_input("Data końcowa", value=pd.to_datetime("2026-08-19"))
-
+            idx = st.sidebar.selectbox("Wskaźnik:",
+                                       ("NDVI (Wegetacja)", "NDWI (Woda / Mokradła)", "NDMI (Wilgotność roślin)"))
             if st.button("Generuj wykres"):
-                df_ts = calculate_index_time_series(feat, selected_index, start_date, end_date)
-                if df_ts is not None and not df_ts.empty:
-                    st.line_chart(df_ts)
-                else:
-                    st.warning("Brak danych.")
+                df = calculate_index_time_series(feat, idx, pd.to_datetime("2025-01-01"), pd.to_datetime("2026-08-19"))
+                if df is not None: st.line_chart(df)
             st_folium(m, width=1100, height=500)
 
+        # --- MODUŁ 2: ZANIECZYSZCZENIE (S5P) ---
         elif modul == "Zanieczyszczenie powietrza (S5P)":
-            selected_param = st.selectbox("Wybierz parametr:",
-                                          ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)",
-                                           "Aerozole (Smog / Pyły)"))
-            dates = get_available_dates(selected_param)
+            param = st.selectbox("Parametr:", ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)",
+                                               "Aerozole (Smog / Pyły)"))
+            dates = get_available_dates(param)
             if dates:
-                selected_date = st.selectbox("Wybierz datę:", dates)
+                date = st.selectbox("Data:", dates)
                 if st.button("Generuj mapę"):
-                    tile_url, min_val, max_val = get_atmospheric_layer(selected_date, selected_param)
+                    url, min_v, max_v = get_atmospheric_layer(date, param)
                     m = folium.Map(location=[53.6, 15.6], zoom_start=8)
-                    folium.TileLayer(tiles=tile_url, attr="GEE").add_to(m)
+                    folium.TileLayer(tiles=url, attr="GEE").add_to(m)
+                    cm.LinearColormap(['yellow', 'orange', 'red', 'purple'], vmin=min_v, vmax=max_v).add_to(m)
                     st_folium(m, width=1100, height=600)
-                    info = get_parameter_info(selected_param)
-                    with st.expander("ℹ️ Informacje"):
-                        st.markdown(f"**Opis:** {info.get('opis')}")
+                    with st.expander("ℹ️ Informacje"): st.markdown(f"**Opis:** {get_parameter_info(param).get('opis')}")
 
+        # --- MODUŁ 3: GIOŚ ---
         elif modul == "Pomiary naziemne (GIOŚ)":
             if st.button("Pobierz dane"):
                 stations = get_gios_stations()
@@ -85,42 +79,45 @@ if init_gee():
                                   popup=f"{s['stationName']}: {aqi}").add_to(m)
                 st_folium(m, width=1100, height=500)
 
-                sel_station = st.selectbox("Wybierz stację dla szczegółów:", [s['stationName'] for s in stations])
-                if st.button("Pokaż historię"):
-                    s = next(st for st in stations if st['stationName'] == sel_station)
+                sel = st.selectbox("Stacja:", [s['stationName'] for s in stations])
+                if st.button("Historia (ostatnie 72h)"):
+                    s = next(st for st in stations if st['stationName'] == sel)
                     df = get_historical_air_quality(float(s['gegrLat']), float(s['gegrLon']))
                     st.line_chart(df)
                     st.dataframe(df)
 
+        # --- MODUŁ 4: WODA ---
         elif modul == "Jakość Wód (Chlorofil-a)":
             dates = get_s2_water_dates()
-            sel_date = st.selectbox("Wybierz datę:", dates)
-            if st.button("Generuj mapę chlorofilu"):
+            sel_date = st.selectbox("Data:", dates)
+            if st.button("Generuj mapę"):
                 url, min_v, max_v = get_water_quality_layer(sel_date)
                 m = folium.Map(location=[53.7, 14.4], zoom_start=10)
                 folium.TileLayer(tiles=url, attr="GEE").add_to(m)
                 st_folium(m, width=1100, height=600)
 
+        # --- MODUŁ 5: OSM ---
         elif modul == "Dane wektorowe (OSM)":
             typ_osm = st.radio("Baza:", ("PLB", "PLH"))
-            feat_osm = next(f for f in (data_plb if typ_osm == "PLB" else data_plh)["features"] if
-                            f["properties"].get("nazwa") == st.selectbox("Obszar:",
-                                                                         [f["properties"].get("nazwa") for f in
-                                                                          (data_plb if typ_osm == "PLB" else data_plh)[
-                                                                              "features"]]))
+            ds = data_plb if typ_osm == "PLB" else data_plh
+            names = [f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") for f in ds["features"]]
+            wybrany = st.selectbox("Obszar:", sorted(list(set(names))))
+            feat = next(f for f in ds["features"] if
+                        (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany)
             promien = st.slider("Bufor (m):", 1000, 20000, 5000)
             kat = st.selectbox("Kategoria:", ("Pomniki przyrody", "Rezerwaty przyrody", "Użytki ekologiczne",
                                               "Przejścia dla zwierząt (ekodukty)"))
             if st.button("Szukaj"):
-                geom_osm = shape(feat_osm["geometry"])
+                geom = shape(feat["geometry"])
                 proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2180", always_xy=True).transform
                 unproj = pyproj.Transformer.from_crs("EPSG:2180", "EPSG:4326", always_xy=True).transform
-                buffered = transform(unproj, transform(proj, geom_osm).buffer(promien))
+                buffered = transform(unproj, transform(proj, geom).buffer(promien))
                 min_lon, min_lat, max_lon, max_lat = buffered.bounds
                 res = get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, kat)
-                m = folium.Map(location=[geom_osm.centroid.y, geom_osm.centroid.x], zoom_start=10)
+                m = folium.Map(location=[geom.centroid.y, geom.centroid.x], zoom_start=11)
                 for el in res.get("elements", []):
                     if el["type"] == "node": folium.Marker([el["lat"], el["lon"]]).add_to(m)
                 st_folium(m, width=1100, height=600)
+
     else:
         st.error("Brak plików GeoJSON!")
