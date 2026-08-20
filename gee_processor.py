@@ -5,6 +5,23 @@ import pandas as pd
 import datetime
 
 
+def get_basemap():
+    """Tworzy profesjonalny podkład mapowy (GIS) bezpośrednio w GEE."""
+    # Jasnoszare tło dla lądu
+    bg = ee.Image(1).visualize(palette=['#f8f9fa'])
+
+    # Wody powierzchniowe (jeziora, rzeki, zalewy - jasnoniebieski)
+    water = ee.Image('JRC/GSW1_4/GlobalSurfaceWater').select('max_extent').eq(1)
+    water_viz = water.updateMask(water).visualize(palette=['#a5d8ff'])
+
+    # Granice administracyjne (województwa i państwa - ciemnoszary)
+    borders = ee.FeatureCollection("FAO/GAUL/2015/level1")
+    lines = ee.Image().byte().paint(borders, 0, 1).visualize(palette=['#adb5bd'])
+
+    # Łączymy warstwy podkładu: tło -> woda -> granice
+    return bg.blend(water_viz).blend(lines)
+
+
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
     try:
         roi = ee.Geometry(geojson_feature['geometry'])
@@ -78,15 +95,19 @@ def get_atmospheric_layer(target_date, parameter):
             "Aerozole (Smog / Pyły)": ('L3_AER_AI', 'absorbing_aerosol_index', 0.1, 2.0)
         }
         col, band, threshold, max_val = configs[parameter]
+
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}').filterDate(start, end).select(band).mean()
         s5p_high = s5p.updateMask(s5p.gt(threshold))
-        viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
+        palette = ['yellow', 'orange', 'red', 'purple']
+        viz = {'min': threshold, 'max': max_val, 'palette': palette}
 
-        # Ramka na województwo zachodniopomorskie do PDF
+        # Tworzenie kompozycji (Podkład + Dane S5P) do wyeksportowania do PDF
+        basemap = get_basemap()
+        data_viz = s5p_high.visualize(min=threshold, max=max_val, palette=palette)
+        composite = basemap.blend(data_viz)
+
         region = ee.Geometry.Rectangle([14.0, 52.6, 17.0, 54.6])
-        thumb_url = s5p_high.getThumbURL({
-            'min': threshold, 'max': max_val,
-            'palette': ['yellow', 'orange', 'red', 'purple'],
+        thumb_url = composite.getThumbURL({
             'region': region, 'dimensions': 800, 'format': 'png'
         })
 
@@ -124,15 +145,19 @@ def get_water_quality_layer(target_date):
         ndwi = img.normalizedDifference(['B3', 'B8'])
         water_mask = ndwi.gt(0.1)
         ndci = img.normalizedDifference(['B5', 'B4']).updateMask(water_mask)
+
         min_val = -0.1
         max_val = 0.2
-        viz = {'min': min_val, 'max': max_val, 'palette': ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red']}
+        palette = ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red']
+        viz = {'min': min_val, 'max': max_val, 'palette': palette}
 
-        # Ramka wycentrowana wokół Zalewu Szczecińskiego i ujścia Odry do PDF
+        # Tworzenie kompozycji (Podkład + Dane NDCI) do PDF
+        basemap = get_basemap()
+        data_viz = ndci.visualize(min=min_val, max=max_val, palette=palette)
+        composite = basemap.blend(data_viz)
+
         region = ee.Geometry.Rectangle([14.1, 53.4, 14.8, 54.0])
-        thumb_url = ndci.getThumbURL({
-            'min': min_val, 'max': max_val,
-            'palette': ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red'],
+        thumb_url = composite.getThumbURL({
             'region': region, 'dimensions': 800, 'format': 'png'
         })
 
