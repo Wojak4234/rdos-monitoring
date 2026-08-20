@@ -181,12 +181,12 @@ if init_gee():
 
         # ---------------- MODUŁ 3: STACJE GIOŚ ----------------
         elif modul == "Pomiary naziemne (GIOŚ)":
-            st.header("📍 Pomiary naziemne jakości powietrza (API GIOŚ)")
+            st.header("📍 Pomiary naziemne jakości powietrza (API GIOŚ / Copernicus)")
             st.markdown(
-                "Ten moduł łączy się na żywo z Głównym Inspektoratem Ochrony Środowiska, aby zweryfikować dane satelitarne za pomocą oficjalnych stacji naziemnych w woj. zachodniopomorskim.")
+                "Ten moduł łączy się na żywo z Głównym Inspektoratem Ochrony Środowiska. W przypadku blokady państwowych serwerów system automatycznie pobiera zastępcze dane modelowe z programu Copernicus (Open-Meteo) dla tych samych lokalizacji.")
 
             if st.button("Pobierz aktualne dane ze stacji"):
-                with st.spinner("Odpytuję serwery GIOŚ..."):
+                with st.spinner("Odpytuję serwery pomiarowe..."):
                     try:
                         stations = get_gios_stations()
                         if stations:
@@ -198,20 +198,20 @@ if init_gee():
                                 lon = float(s['gegrLon'])
                                 name = s['stationName']
 
-                                # Pobieramy jakość powietrza
-                                aqi_level, calc_date = get_gios_aqi(s_id)
+                                # Przekazujemy współrzędne w razie potrzeby użycia systemu zapasowego
+                                aqi_level, calc_date = get_gios_aqi(s_id, lat, lon)
 
-                                # Logika kolorowania
+                                # Elastyczna logika kolorowania markerów
                                 color = "gray"
-                                if aqi_level == "Bardzo dobry":
+                                if "Bardzo dobry" in aqi_level:
                                     color = "darkgreen"
-                                elif aqi_level == "Dobry":
+                                elif "Dobry" in aqi_level:
                                     color = "green"
-                                elif aqi_level == "Umiarkowany":
+                                elif "Umiarkowany" in aqi_level:
                                     color = "orange"
-                                elif aqi_level in ["Dostateczny", "Zły"]:
+                                elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
                                     color = "lightred"
-                                elif aqi_level == "Bardzo zły":
+                                elif "Bardzo zły" in aqi_level:
                                     color = "red"
 
                                 popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
@@ -223,11 +223,12 @@ if init_gee():
                                     icon=folium.Icon(color=color, icon="info-sign")
                                 ).add_to(m_gios)
 
-                            st.success(f"Pobrano dane dla {len(stations)} stacji w województwie.")
+                            st.success(
+                                f"Pobrano dane (GIOŚ / Model Satelitarny) dla {len(stations)} lokalizacji w województwie.")
                             st_folium(m_gios, width=1100, height=600, returned_objects=[])
 
                         else:
-                            st.warning("Nie znaleziono stacji GIOŚ dla wybranego województwa.")
+                            st.warning("Nie znaleziono stacji dla wybranego województwa.")
                     except Exception as e:
                         st.error(str(e))
 

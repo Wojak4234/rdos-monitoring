@@ -230,34 +230,18 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- PANCERNE FUNKCJE DLA GIOŚ (Z systemem awaryjnym) ---
-
 def fetch_with_fallback(target_url):
-    """Próbuje połączyć się z GIOŚ z wydłużonym czasem i różnymi metodami."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-
-    # 1. Próba bezpośrednia (często blokowana w chmurze)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         r = requests.get(target_url, headers=headers, timeout=5)
         if r.status_code == 200:
             return r.json()
     except:
         pass
-
-    # 2. Próba przez bramkę Allorigins z wydłużonym czasem (aż 20 sekund)
-    try:
-        encoded_url = urllib.parse.quote(target_url, safe='')
-        r = requests.get(f"https://api.allorigins.win/get?url={encoded_url}", timeout=20)
-        if r.status_code == 200:
-            return json.loads(r.json()['contents'])
-    except Exception as e:
-        raise Exception(f"Połączenie odrzucone. Błąd: {e}")
+    raise Exception("Połączenie zablokowane")
 
 
 def get_gios_stations():
-    """Pobiera listę stacji. Jeśli GIOŚ zablokuje, ładuje wbudowaną bazę awaryjną."""
     try:
         target_url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
         stations = fetch_with_fallback(target_url)
@@ -273,8 +257,7 @@ def get_gios_stations():
 
         return zachodniopomorskie_stations
     except Exception as e:
-        # TWARDY FALLBACK: Jeśli padnie API, używamy zaszytej bazy stacji dla regionu.
-        print(f"Użyto bazy awaryjnej GIOŚ, powód: {e}")
+        print(f"Użyto bazy awaryjnej, powód: {e}")
         return [
             {"id": 730, "stationName": "Szczecin, ul. Andrzejewskiego", "gegrLat": "53.4321", "gegrLon": "14.5828"},
             {"id": 732, "stationName": "Szczecin, ul. Piłsudskiego", "gegrLat": "53.4325", "gegrLon": "14.5483"},
@@ -284,15 +267,41 @@ def get_gios_stations():
         ]
 
 
-def get_gios_aqi(station_id):
-    """Odpytuje konkretną stację. Mniejsze ryzyko bloku, bo pobieramy małe porcje danych."""
+def get_gios_aqi(station_id, lat=None, lon=None):
+    """Odpytuje GIOŚ. Jeśli zablokują, wylicza z modelu atmosferycznego Open-Meteo (Copernicus)."""
     try:
         target_url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
         data = fetch_with_fallback(target_url)
 
-        if data.get('stIndexLevel') and data['stIndexLevel'].get('indexLevelName'):
+        if data and data.get('stIndexLevel') and data['stIndexLevel'].get('indexLevelName'):
             return data['stIndexLevel']['indexLevelName'], data.get('stCalcDate', 'Brak daty')
         else:
-            return "Brak danych pomiarowych", "Brak daty"
+            raise Exception("Brak danych GIOŚ")
+
     except Exception:
-        return "Blokada serwera GIOŚ", "Brak daty"
+        # ULTIMATE FALLBACK: API Open-Meteo Air Quality (Oparte na danych satelitarnych Copernicus, nie blokuje chmur)
+        if lat and lon:
+            try:
+                om_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=european_aqi"
+                r = requests.get(om_url, timeout=5)
+                if r.status_code == 200:
+                    aqi = r.json().get('current', {}).get('european_aqi', 0)
+                    time_str = r.json().get('current', {}).get('time', 'Brak daty')
+
+                    # Konwersja indeksu europejskiego na nomenklaturę polską
+                    if aqi <= 20:
+                        return "Bardzo dobry (Zapas: Copernicus)", time_str
+                    elif aqi <= 40:
+                        return "Dobry (Zapas: Copernicus)", time_str
+                    elif aqi <= 60:
+                        return "Umiarkowany (Zapas: Copernicus)", time_str
+                    elif aqi <= 80:
+                        return "Dostateczny (Zapas: Copernicus)", time_str
+                    elif aqi <= 100:
+                        return "Zły (Zapas: Copernicus)", time_str
+                    else:
+                        return "Bardzo zły (Zapas: Copernicus)", time_str
+            except:
+                pass
+
+        return "Brak danych z serwerów", "Brak daty"
