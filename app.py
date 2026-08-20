@@ -6,7 +6,7 @@ from shapely.geometry import shape
 
 from gee_auth import init_gee
 from data_loader import load_data
-from satellite_analysis import calculate_index_time_series, get_atmospheric_layer
+from satellite_analysis import calculate_index_time_series, get_atmospheric_layer, get_available_dates
 
 st.set_page_config(layout="wide")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
@@ -78,45 +78,57 @@ if init_gee():
             elif st.session_state.get("df_ts") is not None and st.session_state["df_ts"].empty:
                 st.warning("Brak danych satelitarnych w wybranym przedziale. Spróbuj rozszerzyć zakres dat.")
 
-            # MAGIA DZIEJE SIĘ TUTAJ: returned_objects=[] zapobiega crashom białego ekranu
             st_folium(m, width=1100, height=500, returned_objects=[])
 
         else:
             st.header("🏭 Monitoring jakości powietrza (Zachodniopomorskie)")
-            st.markdown("Wybierz datę oraz parametr, aby sprawdzić obszary o podwyższonym stężeniu zanieczyszczeń.")
+            st.markdown("Krok 1: Wybierz parametr gazowy. Krok 2: Wybierz z listy jedną z dostępnych dat.")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                selected_date = st.date_input("Wybierz datę zobrazowania:", value=pd.to_datetime("2026-08-15"))
-            with col2:
-                selected_param = st.selectbox(
-                    "Wybierz badany gaz/parametr:",
-                    ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)", "Aerozole (Smog / Pyły)")
-                )
+            # WYBÓR GAZU
+            selected_param = st.selectbox(
+                "Wybierz badany gaz/parametr:",
+                ("NO2 (Dwutlenek azotu)", "SO2 (Dwutlenek siarki)", "CO (Tlenek węgla)", "Aerozole (Smog / Pyły)")
+            )
 
-            if st.button("Generuj mapę zanieczyszczeń"):
-                with st.spinner(f"Pobieranie danych dla {selected_param}..."):
-                    tile_url = get_atmospheric_layer(str(selected_date), selected_param)
+            # Sprawdzamy czy użytkownik zmienił gaz (żeby pobrać nowe daty)
+            if "last_param" not in st.session_state or st.session_state["last_param"] != selected_param:
+                st.session_state["last_param"] = selected_param
+                st.session_state["available_dates"] = None
 
-                    if tile_url:
-                        # Wycentrowanie na środek woj. zachodniopomorskiego
-                        m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
+            # Jeśli nie mamy dat w pamięci dla tego gazu, pobieramy je
+            if st.session_state["available_dates"] is None:
+                with st.spinner("Przeszukuję archiwum GEE w poszukiwaniu dostępnych zdjęć (ostatnie 60 dni)..."):
+                    st.session_state["available_dates"] = get_available_dates(selected_param, days_back=60)
 
-                        folium.TileLayer(
-                            tiles=tile_url,
-                            attr="Google Earth Engine - Sentinel-5P",
-                            name=selected_param,
-                            overlay=True,
-                            control=True,
-                            opacity=0.6
-                        ).add_to(m_atm)
+            dates = st.session_state["available_dates"]
 
-                        folium.LayerControl().add_to(m_atm)
+            # WYBÓR DATY Z LISTY ZNALEZIONYCH
+            if dates:
+                selected_date_str = st.selectbox("Wybierz datę zobrazowania:", dates)
 
-                        st.success(f"Warstwa {selected_param} została wygenerowana dla województwa!")
-                        # TUTAJ RÓWNIEŻ BLOKUJEMY CRASHE
-                        st_folium(m_atm, width=1100, height=600, returned_objects=[])
-                    else:
-                        st.error("Brak danych satelitarnych dla tego dnia (satelita mógł nie wykonać pomiaru lub obszar był zakryty grubymi chmurami). Wybierz inną datę.")
+                if st.button("Generuj mapę zanieczyszczeń"):
+                    with st.spinner(f"Przetwarzanie mapy {selected_param} dla daty {selected_date_str}..."):
+                        tile_url = get_atmospheric_layer(selected_date_str, selected_param)
+
+                        if tile_url:
+                            m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
+
+                            folium.TileLayer(
+                                tiles=tile_url,
+                                attr="Google Earth Engine - Sentinel-5P",
+                                name=selected_param,
+                                overlay=True,
+                                control=True,
+                                opacity=0.6
+                            ).add_to(m_atm)
+
+                            folium.LayerControl().add_to(m_atm)
+
+                            st.success(f"Warstwa {selected_param} dla województwa (z {selected_date_str}) została wygenerowana!")
+                            st_folium(m_atm, width=1100, height=600, returned_objects=[])
+                        else:
+                            st.error("Wystąpił błąd podczas renderowania mapy dla tego dnia.")
+            else:
+                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 60 dni.")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
