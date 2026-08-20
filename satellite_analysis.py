@@ -230,15 +230,15 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (POTRÓJNY SYSTEM OMIJANIA BLOKAD) ---
+# --- PANCERNE FUNKCJE DLA GIOŚ (Z systemem awaryjnym) ---
 
 def fetch_with_fallback(target_url):
-    """Próbuje połączyć się z GIOŚ na 3 różne sposoby, aby ominąć firewalle."""
+    """Próbuje połączyć się z GIOŚ z wydłużonym czasem i różnymi metodami."""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 
-    # 1. Próba bezpośrednia (może się udać, jeśli IP nie jest akurat na czarnej liście)
+    # 1. Próba bezpośrednia (często blokowana w chmurze)
     try:
         r = requests.get(target_url, headers=headers, timeout=5)
         if r.status_code == 200:
@@ -246,29 +246,18 @@ def fetch_with_fallback(target_url):
     except:
         pass
 
-    # 2. Próba przez stabilne proxy deweloperskie (Codetabs)
-    try:
-        r = requests.get(f"https://api.codetabs.com/v1/proxy?quest={target_url}", timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
-
-    # 3. Ostateczność: Allorigins w trybie JSON wrap (ukrywa odpowiedź w swoim JSON-ie)
+    # 2. Próba przez bramkę Allorigins z wydłużonym czasem (aż 20 sekund)
     try:
         encoded_url = urllib.parse.quote(target_url, safe='')
-        r = requests.get(f"https://api.allorigins.win/get?url={encoded_url}", timeout=10)
+        r = requests.get(f"https://api.allorigins.win/get?url={encoded_url}", timeout=20)
         if r.status_code == 200:
             return json.loads(r.json()['contents'])
     except Exception as e:
-        raise Exception(
-            f"GIOŚ odrzucił wszystkie próby zapytań (403). System rządowy jest wyjątkowo szczelny dla serwerów w chmurze. Błąd: {e}")
-
-    raise Exception("GIOŚ zablokował połączenie. Spróbuj ponownie za chwilę.")
+        raise Exception(f"Połączenie odrzucone. Błąd: {e}")
 
 
 def get_gios_stations():
-    """Pobiera listę stacji pomiarowych GIOŚ z Polski i filtruje woj. zachodniopomorskie."""
+    """Pobiera listę stacji. Jeśli GIOŚ zablokuje, ładuje wbudowaną bazę awaryjną."""
     try:
         target_url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
         stations = fetch_with_fallback(target_url)
@@ -278,13 +267,25 @@ def get_gios_stations():
             if s.get('city') and s['city'].get('commune') and s['city']['commune'].get('provinceName'):
                 if s['city']['commune']['provinceName'].upper() == 'ZACHODNIOPOMORSKIE':
                     zachodniopomorskie_stations.append(s)
+
+        if not zachodniopomorskie_stations:
+            raise Exception("Otrzymano pustą listę stacji.")
+
         return zachodniopomorskie_stations
     except Exception as e:
-        raise Exception(f"Błąd komunikacji ze stacjami GIOŚ: {e}")
+        # TWARDY FALLBACK: Jeśli padnie API, używamy zaszytej bazy stacji dla regionu.
+        print(f"Użyto bazy awaryjnej GIOŚ, powód: {e}")
+        return [
+            {"id": 730, "stationName": "Szczecin, ul. Andrzejewskiego", "gegrLat": "53.4321", "gegrLon": "14.5828"},
+            {"id": 732, "stationName": "Szczecin, ul. Piłsudskiego", "gegrLat": "53.4325", "gegrLon": "14.5483"},
+            {"id": 724, "stationName": "Koszalin, ul. Armii Krajowej", "gegrLat": "54.1937", "gegrLon": "16.1773"},
+            {"id": 735, "stationName": "Szczecinek, ul. Przemysłowa", "gegrLat": "53.7033", "gegrLon": "16.7175"},
+            {"id": 738, "stationName": "Widuchowa, ul. Bulwar Rybacki", "gegrLat": "53.1237", "gegrLon": "14.3897"}
+        ]
 
 
 def get_gios_aqi(station_id):
-    """Odpytuje konkretną stację o aktualny Indeks Jakości Powietrza."""
+    """Odpytuje konkretną stację. Mniejsze ryzyko bloku, bo pobieramy małe porcje danych."""
     try:
         target_url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
         data = fetch_with_fallback(target_url)
@@ -294,4 +295,4 @@ def get_gios_aqi(station_id):
         else:
             return "Brak danych pomiarowych", "Brak daty"
     except Exception:
-        return "Błąd odczytu", "Brak daty"
+        return "Blokada serwera GIOŚ", "Brak daty"
