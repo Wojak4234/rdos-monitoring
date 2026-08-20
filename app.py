@@ -9,6 +9,7 @@ from streamlit_folium import st_folium
 from shapely.ops import transform
 from shapely.geometry import shape, Point, LineString, mapping
 import json
+import datetime
 
 from gee_auth import init_gee
 from data_loader import load_data
@@ -21,7 +22,7 @@ from gee_processor import (
 )
 from report_generator import generate_general_pdf_report
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
 if init_gee():
@@ -92,7 +93,7 @@ if init_gee():
                 st.line_chart(st.session_state["df_ts"])
 
                 info_n2k = get_parameter_info(selected_index)
-                with st.expander("ℹ️ Interpretacja wskaźnika"):
+                with st.expander("ℹ️ Interpretacja wskaźnika (Wartości dodatnie/ujemne)"):
                     st.markdown(f"**Opis:** {info_n2k['opis']}")
                     st.markdown(f"**Zakresy i wartości:**\n{info_n2k['normy']}")
 
@@ -115,7 +116,8 @@ if init_gee():
                             "Okres": f"{start_date} do {end_date}",
                             "Opis merytoryczny": info_n2k.get("opis", ""),
                             "Interpretacja": info_n2k.get("normy", "")
-                        }
+                        },
+                        lat=geom.centroid.y, lon=geom.centroid.x, station_name=wybrany
                     )
                     st.download_button(
                         label="📥 Pobierz oficjalny raport PDF",
@@ -178,17 +180,14 @@ if init_gee():
                                 colormap.add_to(m_atm)
                                 folium.LayerControl().add_to(m_atm)
 
-                                st.success(
-                                    f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
+                                st.success(f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
                                 st_folium(m_atm, width=1100, height=600, returned_objects=[])
 
                                 param_info = get_parameter_info(selected_param)
                                 if param_info:
                                     with st.expander("ℹ️ Jak czytać ten wynik? (Opis i progi ostrzegawcze)"):
                                         st.markdown(f"**Co to jest?**<br>{param_info['opis']}", unsafe_allow_html=True)
-                                        st.markdown(
-                                            f"**Normy i interpretacja:**<br>{param_info['normy']}",
-                                            unsafe_allow_html=True)
+                                        st.markdown(f"**Normy i interpretacja:**<br>{param_info['normy']}", unsafe_allow_html=True)
 
                                 pdf_bytes = generate_general_pdf_report(
                                     title=f"Raport Zanieczyszczen Atmosferycznych - {selected_param}",
@@ -197,7 +196,8 @@ if init_gee():
                                         "Parametr": selected_param,
                                         "Opis merytoryczny": param_info.get("opis", ""),
                                         "Normy i progi": param_info.get("normy", "")
-                                    }
+                                    },
+                                    lat=53.6, lon=15.6, station_name="Region Zachodniopomorski"
                                 )
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
@@ -210,8 +210,7 @@ if init_gee():
                         except Exception as e:
                             st.error(f"Wystąpił błąd silnika Earth Engine: {e}")
             else:
-                st.warning(
-                    "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
+                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
 
         # ---------------- MODUŁ 3: STACJE GIOŚ ----------------
         elif modul == "Pomiary naziemne (GIOŚ)":
@@ -246,16 +245,11 @@ if init_gee():
                     calc_date = s['calc_date']
 
                     color = "gray"
-                    if "Bardzo dobry" in aqi_level:
-                        color = "darkgreen"
-                    elif "Dobry" in aqi_level:
-                        color = "green"
-                    elif "Umiarkowany" in aqi_level:
-                        color = "orange"
-                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
-                        color = "lightred"
-                    elif "Bardzo zły" in aqi_level:
-                        color = "red"
+                    if "Bardzo dobry" in aqi_level: color = "darkgreen"
+                    elif "Dobry" in aqi_level: color = "green"
+                    elif "Umiarkowany" in aqi_level: color = "orange"
+                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level: color = "lightred"
+                    elif "Bardzo zły" in aqi_level: color = "red"
 
                     popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
                     folium.Marker(
@@ -288,8 +282,7 @@ if init_gee():
                     wybrane_parametry = st.multiselect(
                         "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
                         options=dostepne_kolumny,
-                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
-                                 col in dostepne_kolumny],
+                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if col in dostepne_kolumny],
                         key="gios_param_select"
                     )
 
@@ -401,15 +394,16 @@ if init_gee():
                                     st.markdown(f"**Opis:** {info_wody['opis']}")
                                     st.markdown(f"**Zakresy i wartości:**\n{info_wody['normy']}")
 
-                                # W module "Jakość Wód (Chlorofil-a)"
                                 pdf_bytes = generate_general_pdf_report(
                                     title="Raport Jakosci Wod (Sentinel-2 NDCI)",
                                     subtitle=f"Data: {selected_water_date}",
-                                    details_dict={...},
-                                    lat=53.7, lon=14.4,  # Dodaj współrzędne dla Zalewu
-                                    station_name="Zalew Szczecinski"
+                                    details_dict={
+                                        "Wskaznik": "Chlorofil-a (NDCI)",
+                                        "Opis merytoryczny": info_wody.get("opis", ""),
+                                        "Interpretacja": info_wody.get("normy", "")
+                                    },
+                                    lat=53.7, lon=14.4, station_name="Zalew Szczecinski"
                                 )
-
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
                                     data=pdf_bytes,
@@ -492,8 +486,7 @@ if init_gee():
                                                   icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
                                 elif el["type"] in ["way", "relation"] and "geometry" in el:
                                     coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
-                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
-                                        m_osm)
+                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(m_osm)
                             st.success(f"Znaleziono obiektów: {len(filtered_elements)}")
                         else:
                             st.warning("Brak obiektów w strefie buforowej.")
@@ -527,7 +520,8 @@ if init_gee():
                                     subtitle=f"Obszar Natura 2000: {wybrany_osm} | Kategoria: {kategoria_osm}",
                                     df_data=df_osm_summary,
                                     details_dict={"Bufor": f"{promien} metrów",
-                                                  "Liczba znalezionych obiektow": len(filtered_elements)}
+                                                  "Liczba znalezionych obiektow": len(filtered_elements)},
+                                    lat=geom_osm.centroid.y, lon=geom_osm.centroid.x, station_name=wybrany_osm
                                 )
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
