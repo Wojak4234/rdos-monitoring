@@ -82,13 +82,19 @@ if init_gee():
 
             if st.sidebar.button("Generuj wykres wskaźnika"):
                 with st.spinner(f"Pobieranie szeregu czasowego ({selected_index}) ze Sentinel-2..."):
-                    st.session_state["df_ts"] = calculate_index_time_series(feat, selected_index, start_date, end_date)
+                    df_res = calculate_index_time_series(feat, selected_index, start_date, end_date)
+                    if df_res is not None:
+                        df_res = df_res[df_res.index <= pd.Timestamp.now()]
+                    st.session_state["df_ts"] = df_res
 
             if st.session_state.get("df_ts") is not None and not st.session_state["df_ts"].empty:
                 st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
                 st.line_chart(st.session_state["df_ts"])
 
                 info_n2k = get_parameter_info(selected_index)
+                with st.expander("ℹ️ Interpretacja wskaźnika"):
+                    st.markdown(f"**Opis:** {info_n2k['opis']}")
+                    st.markdown(f"**Zakresy i wartości:**\n{info_n2k['normy']}")
 
                 col_csv, col_pdf = st.columns(2)
                 with col_csv:
@@ -181,7 +187,7 @@ if init_gee():
                                     with st.expander("ℹ️ Jak czytać ten wynik? (Opis i progi ostrzegawcze)"):
                                         st.markdown(f"**Co to jest?**<br>{param_info['opis']}", unsafe_allow_html=True)
                                         st.markdown(
-                                            f"**Jak interpretować wartości na mapie?**<br>{param_info['normy']}",
+                                            f"**Normy i interpretacja:**<br>{param_info['normy']}",
                                             unsafe_allow_html=True)
 
                                 pdf_bytes = generate_general_pdf_report(
@@ -269,8 +275,10 @@ if init_gee():
                 if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
                     with st.spinner("Pobieram pełne dane historyczne..."):
                         sel_s = station_dict[selected_station]
-                        st.session_state["df_hist"] = get_historical_air_quality(float(sel_s['gegrLat']),
-                                                                                 float(sel_s['gegrLon']), past_days=3)
+                        df_raw = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']), past_days=3)
+                        if df_raw is not None:
+                            df_raw = df_raw[df_raw.index <= pd.Timestamp.now()]
+                        st.session_state["df_hist"] = df_raw
 
                 df_hist = st.session_state.get("df_hist", None)
                 if df_hist is not None and not df_hist.empty:
@@ -287,6 +295,7 @@ if init_gee():
 
                     if wybrane_parametry:
                         df_filtered = df_hist[wybrane_parametry]
+                        df_filtered = df_filtered[df_filtered.index <= pd.Timestamp.now()]
                         st.line_chart(df_filtered)
 
                         with st.expander("📖 Legenda i normy jakości powietrza (Standardy / WHO)"):
@@ -328,10 +337,14 @@ if init_gee():
                                 mime="text/csv"
                             )
                         with col_pdf:
+                            sel_s_info = station_dict[selected_station]
                             pdf_bytes = generate_general_pdf_report(
                                 title="Raport Pomiary Naziemne (GIOS / Copernicus)",
                                 subtitle=f"Stacja pomiarowa: {selected_station} | Okres: {rep_start} do {rep_end}",
-                                df_data=df_final_pdf
+                                df_data=df_final_pdf,
+                                lat=float(sel_s_info['gegrLat']),
+                                lon=float(sel_s_info['gegrLon']),
+                                station_name=selected_station
                             )
                             st.download_button(
                                 label="📥 Pobierz oficjalny raport PDF",
@@ -384,14 +397,17 @@ if init_gee():
                                 st_folium(m_water, width=1100, height=600, returned_objects=[])
 
                                 info_wody = get_parameter_info("Chlorofil-a (NDCI)")
+                                with st.expander("ℹ️ Interpretacja wskaźnika NDCI (Chlorofil-a)"):
+                                    st.markdown(f"**Opis:** {info_wody['opis']}")
+                                    st.markdown(f"**Zakresy i wartości:**\n{info_wody['normy']}")
+
                                 pdf_bytes = generate_general_pdf_report(
                                     title="Raport Jakosci Wod (Sentinel-2 NDCI)",
                                     subtitle=f"Obszar: Odra i Zalew Szczecinski | Data: {selected_water_date}",
                                     details_dict={
                                         "Wskaznik": "Chlorofil-a (NDCI)",
                                         "Opis merytoryczny": info_wody.get("opis", ""),
-                                        "Normy i interpretacja": info_wody.get("normy", ""),
-                                        "Skala": "Ciemnoniebieski = woda czysta, Żółty/Czerwony = zakwity/dużo materii organicznej"
+                                        "Normy i interpretacja": info_wody.get("normy", "")
                                     }
                                 )
                                 st.download_button(
@@ -500,7 +516,7 @@ if init_gee():
                             col_json, col_pdf = st.columns(2)
                             with col_json:
                                 st.download_button(
-                                    label="📥 Pobierz wektory jako JSON",
+                                    label="📥 Pobierz znalezione wektory jako JSON",
                                     data=json_string.encode('utf-8'),
                                     file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
                                     mime="application/json"

@@ -80,15 +80,22 @@ def get_gios_aqi(station_id, lat=None, lon=None):
 
 
 def get_historical_air_quality(lat, lon, past_days=3):
-    """Pobiera pełen zestaw historycznych parametrów z modelu Copernicus."""
     variables = "pm10,pm2_5,nitrogen_dioxide,ozone,sulphur_dioxide,carbon_monoxide,dust,ammonia"
     url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly={variables}&past_days={past_days}"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
-            df = pd.DataFrame(r.json()['hourly'])
+            data = r.json()
+            df = pd.DataFrame(data['hourly'])
             df['time'] = pd.to_datetime(df['time'])
+            if df['time'].dt.tz is not None:
+                df['time'] = df['time'].dt.tz_localize(None)
             df.set_index('time', inplace=True)
+
+            # Twarda blokada danych z przyszłości
+            now = pd.Timestamp.now()
+            df = df[df.index <= now]
+
             df.rename(columns={
                 'pm10': 'PM10 (µg/m³)',
                 'pm2_5': 'PM2.5 (µg/m³)',
@@ -96,10 +103,10 @@ def get_historical_air_quality(lat, lon, past_days=3):
                 'ozone': 'Ozon (µg/m³)',
                 'sulphur_dioxide': 'SO2 (µg/m³)',
                 'carbon_monoxide': 'CO (µg/m³)',
-                'dust': 'Pył pustynny / Pyły (µg/m³)',
+                'dust': 'Pyl pustynny / Pyły (µg/m³)',
                 'ammonia': 'Amoniak (µg/m³)'
             }, inplace=True)
             return df.dropna(how='all')
-    except:
-        pass
+    except Exception as e:
+        print(f"Błąd pobierania historii modeli: {e}")
     return None
