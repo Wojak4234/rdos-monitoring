@@ -112,27 +112,28 @@ if init_gee():
 
                 if st.button("Generuj mapę zanieczyszczeń"):
                     with st.spinner(f"Przetwarzanie mapy {selected_param} dla daty {selected_date_str}..."):
-                        tile_url = get_atmospheric_layer(selected_date_str, selected_param)
+                        try:
+                            tile_url = get_atmospheric_layer(selected_date_str, selected_param)
 
-                        if tile_url:
-                            m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
+                            if tile_url:
+                                m_atm = folium.Map(location=[53.6, 15.6], zoom_start=8)
 
-                            folium.TileLayer(
-                                tiles=tile_url,
-                                attr="Google Earth Engine - Sentinel-5P",
-                                name=selected_param,
-                                overlay=True,
-                                control=True,
-                                opacity=0.6
-                            ).add_to(m_atm)
+                                folium.TileLayer(
+                                    tiles=tile_url,
+                                    attr="Google Earth Engine - Sentinel-5P",
+                                    name=selected_param,
+                                    overlay=True,
+                                    control=True,
+                                    opacity=0.6
+                                ).add_to(m_atm)
 
-                            folium.LayerControl().add_to(m_atm)
+                                folium.LayerControl().add_to(m_atm)
 
-                            st.success(f"Warstwa {selected_param} dla województwa (z {selected_date_str}) została wygenerowana!")
-                            st_folium(m_atm, width=1100, height=600, returned_objects=[])
-                        else:
-                            st.error("Wystąpił błąd podczas renderowania mapy dla tego dnia.")
-            else:
-                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
-    else:
-        st.error("Upewnij się, że pliki PLB.geojson, PLH.geojson znajdują się w folderze głównym projektu!")
+                                st.success(
+                                    f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
+                                st_folium(m_atm, width=1100, height=600, returned_objects=[])
+                            else:
+                                st.error("Nie udało się pobrać warstwy (prawdopodobnie brak danych po filtracji).")
+                        except Exception as e:
+                            st.error(
+                                f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")

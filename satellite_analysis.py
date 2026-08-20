@@ -94,32 +94,31 @@ def get_available_dates(parameter, days_back=90):
     except Exception as e:
         raise Exception(f"Błąd GEE: {str(e)}")
 
+
 def get_atmospheric_layer(target_date, parameter):
     try:
-        region = ee.FeatureCollection("FAO/GAUL/2015/level1") \
-            .filter(ee.Filter.eq('ADM1_NAME', 'Zachodniopomorskie'))
-
         start = ee.Date(target_date)
         end = start.advance(1, 'day')
 
+        # Obniżone progi - zachodniopomorskie jest czyste, więc musimy być bardziej czuli!
         if parameter == "NO2 (Dwutlenek azotu)":
-            col, band, threshold, max_val = 'L3_NO2', 'tropospheric_NO2_column_number_density', 0.00004, 0.00015
+            col, band, threshold, max_val = 'L3_NO2', 'tropospheric_NO2_column_number_density', 0.00002, 0.0001
         elif parameter == "SO2 (Dwutlenek siarki)":
-            col, band, threshold, max_val = 'L3_SO2', 'SO2_column_number_density', 0.0001, 0.0005
+            col, band, threshold, max_val = 'L3_SO2', 'SO2_column_number_density', 0.00001, 0.0005
         elif parameter == "CO (Tlenek węgla)":
-            col, band, threshold, max_val = 'L3_CO', 'CO_column_number_density', 0.03, 0.05
+            col, band, threshold, max_val = 'L3_CO', 'CO_column_number_density', 0.02, 0.05
         elif parameter == "Aerozole (Smog / Pyły)":
-            col, band, threshold, max_val = 'L3_AER_AI', 'absorbing_aerosol_index', 0.5, 2.0
+            col, band, threshold, max_val = 'L3_AER_AI', 'absorbing_aerosol_index', 0.1, 2.0
         else:
             return None
 
+        # Pobieramy obraz (bez ciężkiego wycinania wielokątem)
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
             .filterDate(start, end) \
-            .filterBounds(region) \
             .select(band) \
-            .mean() \
-            .clip(region)
+            .mean()
 
+        # Odcinamy tylko całkowicie puste/najczystsze tło
         s5p_high = s5p.updateMask(s5p.gt(threshold))
 
         viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
@@ -127,5 +126,5 @@ def get_atmospheric_layer(target_date, parameter):
 
         return map_id_dict['tile_fetcher'].url_format
     except Exception as e:
-        print(f"Błąd pobierania warstwy S5P: {e}")
-        return None
+        # Zwracamy prawdziwy błąd, a nie None
+        raise Exception(f"Błąd GEE: {str(e)}")
