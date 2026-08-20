@@ -1,6 +1,5 @@
 import ee
 import pandas as pd
-import folium
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -57,7 +56,6 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
 
 
 def get_atmospheric_no2_layer(start_date, end_date):
-    """Zwraca obiekt mapy EE dla NO2 do wyświetlenia w Folium"""
     try:
         s5p = ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2') \
             .filterDate(str(start_date), str(end_date)) \
@@ -70,7 +68,6 @@ def get_atmospheric_no2_layer(start_date, end_date):
             'palette': ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']
         }
 
-        # Konwersja obrazu GEE na kafelki Folium
         map_id_dict = s5p.getMapId(no2_viz)
         return map_id_dict['tile_fetcher'].url_format
     except Exception as e:
