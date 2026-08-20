@@ -11,7 +11,7 @@ from reportlab.lib import colors
 
 
 def remove_polish_chars(text):
-    """Usuwa polskie znaki diakrytyczne dla kompatybilności z Helvetica w ReportLab."""
+    """Usuwa polskie znaki diakrytyczne dla kompatybilności z czcionką Helvetica w ReportLab."""
     if not isinstance(text, str): text = str(text)
     replacements = {'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
                     'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'}
@@ -20,7 +20,7 @@ def remove_polish_chars(text):
 
 
 def create_chart_image(df_data):
-    """Generuje czytelny wykres liniowy ze średnimi godzinnymi."""
+    """Generuje wykres liniowy ze średnimi godzinnymi."""
     plt.clf()
     plt.figure(figsize=(7, 3.2))
     for col in df_data.columns:
@@ -43,10 +43,9 @@ def create_chart_image(df_data):
     return img_buffer
 
 
-def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None, lat=None, lon=None,
-                                station_name="Obszar"):
+def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None, map_image_buffer=None):
     """
-    Profesjonalny generator raportów PDF (bez amatorskich wykresów punktowych).
+    Uniwersalny generator raportów PDF z obsługą mapy rastrowej z GEE (wklejanej z bufora RAM).
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -90,12 +89,16 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     story.append(Paragraph(remove_polish_chars(subtitle), subtitle_style))
     story.append(Spacer(1, 4))
 
-    # 2. Blok informacji / metadanych (w tym lokalizacja tekstowa zamiast brzydkiej kropki)
-    if lat is not None and lon is not None:
-        story.append(Paragraph(
-            f"<b>Lokalizacja / Wspolrzedne:</b> Szerokosc: {lat}, Dlugosc: {lon} ({remove_polish_chars(station_name)})",
-            normal_style))
+    # 2. Wklejenie oficjalnej mapy z GEE (jeśli została przekazana)
+    if map_image_buffer is not None:
+        try:
+            map_image_buffer.seek(0)
+            story.append(Image(map_image_buffer, width=420, height=240))
+            story.append(Spacer(1, 10))
+        except Exception as e:
+            print(f"Blod wklejania mapy rastrowej do PDF: {e}")
 
+    # 3. Szczegóły i opisy merytoryczne
     if details_dict:
         for k, v in details_dict.items():
             ck = remove_polish_chars(str(k))
@@ -103,7 +106,7 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             story.append(Paragraph(f"<b>{ck}:</b> {cv}", normal_style))
         story.append(Spacer(1, 8))
 
-    # 3. Wykres i Tabela danych (tylko dla danych pomiarowych / szeregów)
+    # 4. Wykres i Tabela danych pomiarowych
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
         try:
@@ -111,7 +114,7 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             if df_processed.index.tz is not None:
                 df_processed.index = df_processed.index.tz_localize(None)
 
-            # Rygorystyczne odcięcie przyszłości
+            # Odcięcie przyszłości
             current_time = pd.Timestamp.now()
             df_processed = df_processed[df_processed.index <= current_time]
 
@@ -121,7 +124,6 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             print(f"Blod przetwarzania danych w PDF: {e}")
 
         if not df_processed.empty:
-            # Dodanie wykresów
             try:
                 img_buf = create_chart_image(df_processed)
                 story.append(Image(img_buf, width=450, height=190))
@@ -129,7 +131,6 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             except Exception as e:
                 print(f"Blod generowania wykresu do PDF: {e}")
 
-            # Przygotowanie tabeli
             df_table = df_processed.copy()
             df_table.reset_index(inplace=True)
             date_col = df_table.columns[0]
