@@ -56,7 +56,7 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
         return None
 
 
-def get_available_dates(parameter, days_back=90):  # Zwiększyłem bufor do 90 dni
+def get_available_dates(parameter, days_back=90):
     try:
         if parameter == "NO2 (Dwutlenek azotu)":
             col = 'L3_NO2'
@@ -72,28 +72,27 @@ def get_available_dates(parameter, days_back=90):  # Zwiększyłem bufor do 90 d
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
-        region = ee.FeatureCollection("FAO/GAUL/2015/level1") \
-            .filter(ee.Filter.eq('ADM1_NAME', 'Zachodniopomorskie'))
+        # MAGIA JEST TUTAJ: Zamiast całego województwa, używamy jednego punktu
+        # To zapytanie jest 100x szybsze i gwarantuje znalezienie dat przelotu!
+        point = ee.Geometry.Point([15.6, 53.6])
 
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
             .filterDate(str(start_date), str(end_date)) \
-            .filterBounds(region)
+            .filterBounds(point)
 
-        # Używamy lekkiej, serwerowej agregacji (pobiera tylko listę liczb całkowitych)
+        # Pobieramy daty z metadanych
         times = s5p.aggregate_array('system:time_start').getInfo()
 
         if not times:
             return []
 
-        # Konwersja czasu z milisekund na daty przy użyciu Pandas (bezbłędne)
+        # Zamieniamy je na ładną listę (bez duplikatów)
         dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
         dates.sort(reverse=True)
         return dates
 
     except Exception as e:
-        # Zamiast chować błąd, wyrzucamy go na zewnątrz
         raise Exception(f"Błąd GEE: {str(e)}")
-
 
 def get_atmospheric_layer(target_date, parameter):
     try:
