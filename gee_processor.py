@@ -50,8 +50,15 @@ def get_available_dates(parameter, days_back=90):
         col = mapping.get(parameter)
         if not col: return []
         point = ee.Geometry.Point([15.6, 53.6])
-        s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}').filterDate(
-            datetime.date.today() - datetime.timedelta(days=days_back), datetime.date.today()).filterBounds(point)
+
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=days_back)
+
+        # NAPRAWA: Użycie ee.Date() zamiast surowych stringów
+        s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
+            .filterDate(ee.Date(str(start_date)), ee.Date(str(end_date))) \
+            .filterBounds(point)
+
         times = s5p.aggregate_array('system:time_start').getInfo()
         if not times: return []
         dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
@@ -85,9 +92,13 @@ def get_s2_water_dates(days_back=90):
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
         point = ee.Geometry.Point([14.4, 53.7])
-        s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED').filterBounds(point).filterDate(str(start_date),
-                                                                                              str(end_date)).filter(
-            ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 35))
+
+        # Poprawka również tutaj dla spójności
+        s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+            .filterBounds(point) \
+            .filterDate(ee.Date(str(start_date)), ee.Date(str(end_date))) \
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 35))
+
         times = s2.aggregate_array('system:time_start').getInfo()
         if not times: return []
         dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
