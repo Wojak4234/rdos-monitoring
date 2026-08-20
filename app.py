@@ -23,39 +23,38 @@ from gee_processor import (
 from report_generator import generate_general_pdf_report
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
-hide_streamlit_style = """
+custom_style_and_footer = """
 <style>
-/* Ukrycie paska nagłówka, menu i domyślnej stopki */
-[data-testid="stHeader"] {display: none !important;}
-[data-testid="stFooter"] {display: none !important;}
-[data-testid="stToolbar"] {display: none !important;}
-#MainMenu {visibility: hidden !important;}
-footer {visibility: hidden !important;}
+/* Ukrycie standardowego nagłówka, menu i domyślnej stopki */
+#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
+footer {visibility: hidden;}
 
-/* Agresywne ukrywanie Streamlit Cloud Viewer Badge (profil i korona) */
-.viewerBadge_container,
-.viewerBadge_link,
-.styles_viewerBadge__1yG5_,
-div[class^="styles_viewerBadge"],
-div[class^="viewerBadge"] {
-    display: none !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
+/* Stylizacja Twojej autorskiej stopki */
+.footer-custom {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f8f9fa;
+    color: #4a4a4a;
+    text-align: center;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 500;
+    border-top: 1px solid #e9ecef;
+    z-index: 999999;
 }
 
-/* Czasami Streamlit wrzuca to jako element w ramce iframe */
-iframe[title="Streamlit cloud badge"] {
-    display: none !important;
-}
-
-/* Niszczarka na cokolwiek co Streamlit przykleja na sztywno w prawym dolnym rogu */
-div[style*="bottom: 0px"][style*="right: 0px"][style*="position: fixed"] {
-    display: none !important;
-}
+/* Próba przykrycia/ukrycia prawego rogu na wypadek, gdyby ktoś go widział */
+.viewerBadge_container {display: none !important;}
 </style>
+
+<div class="footer-custom">
+    Wykonano na potrzeby RDOŚ Monitoring | Wykonał: Wojciech Świątek
+</div>
 """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+st.markdown(custom_style_and_footer, unsafe_allow_html=True)
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
 if init_gee():
