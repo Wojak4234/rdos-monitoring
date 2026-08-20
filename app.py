@@ -401,15 +401,15 @@ if init_gee():
                                     st.markdown(f"**Opis:** {info_wody['opis']}")
                                     st.markdown(f"**Zakresy i wartości:**\n{info_wody['normy']}")
 
+                                # W module "Jakość Wód (Chlorofil-a)"
                                 pdf_bytes = generate_general_pdf_report(
                                     title="Raport Jakosci Wod (Sentinel-2 NDCI)",
-                                    subtitle=f"Obszar: Odra i Zalew Szczecinski | Data: {selected_water_date}",
-                                    details_dict={
-                                        "Wskaznik": "Chlorofil-a (NDCI)",
-                                        "Opis merytoryczny": info_wody.get("opis", ""),
-                                        "Normy i interpretacja": info_wody.get("normy", "")
-                                    }
+                                    subtitle=f"Data: {selected_water_date}",
+                                    details_dict={...},
+                                    lat=53.7, lon=14.4,  # Dodaj współrzędne dla Zalewu
+                                    station_name="Zalew Szczecinski"
                                 )
+
                                 st.download_button(
                                     label="📥 Pobierz oficjalny raport PDF",
                                     data=pdf_bytes,
