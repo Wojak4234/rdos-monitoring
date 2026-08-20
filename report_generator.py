@@ -27,14 +27,14 @@ def remove_polish_chars(text):
 
 
 def create_chart_image(df_data):
-    """Generuje wykres matplotlib ze średnimi godzinnymi i zwraca go jako bufor bajtów do PDF."""
+    """Generuje wykres matplotlib ze średnimi godzinnymi (tylko przeszłość i teraźniejszość)."""
     plt.figure(figsize=(7, 3.2))
     for col in df_data.columns:
         clean_col = remove_polish_chars(col)
         plt.plot(df_data.index, df_data[col], label=clean_col, linewidth=1.5, marker='o', markersize=3)
 
     plt.title(remove_polish_chars("Wykres zanieczyszczen (srednie godzinne)"), fontsize=9, fontweight='bold')
-    plt.xlabel(remove_polish_chars("Godzina"), fontsize=8)
+    plt.xlabel(remove_polish_chars("Czas"), fontsize=8)
     plt.ylabel(remove_polish_chars("Stzenie / Wartosc"), fontsize=8)
     plt.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
     plt.xticks(rotation=30, fontsize=7)
@@ -51,7 +51,7 @@ def create_chart_image(df_data):
 
 def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None):
     """
-    Uniwersalny generator raportów PDF z wymuszoną agregacją do średnich godzinnych i wykresem.
+    Uniwersalny generator raportów PDF z rygorystycznym odcięciem danych z przyszłości oraz średnimi godzinnymi.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -107,56 +107,64 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
 
-        # 1. Zabezpieczenie: Wymuszenie konwersji indeksu na DatetimeIndex
+        # Konwersja indeksu i czyszczenie stref czasowych
         try:
             if not isinstance(df_processed.index, pd.DatetimeIndex):
                 df_processed.index = pd.to_datetime(df_processed.index)
+            if df_processed.index.tz is not None:
+                df_processed.index = df_processed.index.tz_localize(None)
         except Exception:
             pass
 
-        # 2. Agregacja do pełnych godzin (średnie godzinne)
+        # Rygorystyczne odcięcie przyszłości (wszystko po bieżącym czasie wylatuje)
         if isinstance(df_processed.index, pd.DatetimeIndex):
+            current_time = pd.Timestamp.now().tz_localize(None)
+            df_processed = df_processed[df_processed.index <= current_time]
+
+            # Agregacja do średnich godzinnych
             df_processed = df_processed.resample('h').mean().dropna(how='all')
 
-        # Generowanie wykresu ze średnich godzinnych
-        try:
-            img_buf = create_chart_image(df_processed)
-            story.append(Image(img_buf, width=450, height=200))
-            story.append(Spacer(1, 8))
-        except Exception as e:
-            print(f"Blod generowania wykresu do PDF: {e}")
+        if df_processed.empty:
+            story.append(Paragraph("Brak danych historycznych dla wybranego okresu.", normal_style))
+        else:
+            # Generowanie wykresu
+            try:
+                img_buf = create_chart_image(df_processed)
+                story.append(Image(img_buf, width=450, height=200))
+                story.append(Spacer(1, 8))
+            except Exception as e:
+                print(f"Blod generowania wykresu do PDF: {e}")
 
-        # Przygotowanie tabeli
-        df_table = df_processed.copy()
-        df_table.reset_index(inplace=True)
-        date_col = df_table.columns[0]
+            # Przygotowanie tabeli
+            df_table = df_processed.copy()
+            df_table.reset_index(inplace=True)
+            date_col = df_table.columns[0]
 
-        # Formatowanie kolumny czasu do czystych godzin (np. "17:00 (20.08)")
-        try:
-            df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%H:00 (%d.%m)')
-        except Exception:
-            pass
+            try:
+                df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%H:00 (%d.%m)')
+            except Exception:
+                pass
 
-        new_columns = [remove_polish_chars(col) for col in df_table.columns]
-        df_table.columns = new_columns
+            new_columns = [remove_polish_chars(col) for col in df_table.columns]
+            df_table.columns = new_columns
 
-        table_data = [df_table.columns.tolist()] + df_table.astype(str).values.tolist()
+            table_data = [df_table.columns.tolist()] + df_table.astype(str).values.tolist()
 
-        t = Table(table_data, hAlign='CENTER')
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2d6a4f")),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f8f9fa")),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-            ('FONTSIZE', (0, 1), (-1, -1), 6),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f3f5")])
-        ]))
+            t = Table(table_data, hAlign='CENTER')
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2d6a4f")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f8f9fa")),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+                ('FONTSIZE', (0, 1), (-1, -1), 6),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f3f5")])
+            ]))
 
-        story.append(t)
+            story.append(t)
 
     doc.build(story)
     buffer.seek(0)
