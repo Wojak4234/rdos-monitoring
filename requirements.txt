@@ -1,7 +1,10 @@
-streamlit>=1.30.0
-earthengine-api
+streamlit
 streamlit-folium
 folium
-shapely
 pandas
+branca
 pyproj
+shapely
+earthengine-api
+requests
+reportlab
