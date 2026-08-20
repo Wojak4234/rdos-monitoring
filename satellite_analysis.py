@@ -279,7 +279,7 @@ def get_gios_aqi(station_id, lat=None, lon=None):
             raise Exception("Brak danych GIOŚ")
 
     except Exception:
-        # ULTIMATE FALLBACK: API Open-Meteo Air Quality (Oparte na danych satelitarnych Copernicus, nie blokuje chmur)
+        # ULTIMATE FALLBACK: API Open-Meteo Air Quality
         if lat and lon:
             try:
                 om_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=european_aqi"
@@ -288,7 +288,6 @@ def get_gios_aqi(station_id, lat=None, lon=None):
                     aqi = r.json().get('current', {}).get('european_aqi', 0)
                     time_str = r.json().get('current', {}).get('time', 'Brak daty')
 
-                    # Konwersja indeksu europejskiego na nomenklaturę polską
                     if aqi <= 20:
                         return "Bardzo dobry (Zapas: Copernicus)", time_str
                     elif aqi <= 40:

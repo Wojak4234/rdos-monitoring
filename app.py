@@ -198,10 +198,8 @@ if init_gee():
                                 lon = float(s['gegrLon'])
                                 name = s['stationName']
 
-                                # Przekazujemy współrzędne w razie potrzeby użycia systemu zapasowego
                                 aqi_level, calc_date = get_gios_aqi(s_id, lat, lon)
 
-                                # Elastyczna logika kolorowania markerów
                                 color = "gray"
                                 if "Bardzo dobry" in aqi_level:
                                     color = "darkgreen"
