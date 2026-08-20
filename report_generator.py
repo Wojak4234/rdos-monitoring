@@ -1,17 +1,57 @@
 # report_generator.py
 
 import io
+import unicodedata
 import pandas as pd
+import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 
+def remove_polish_chars(text):
+    """Usuwa polskie znaki diakrytyczne, aby uniknąć błędów kodowania w ReportLab (Standard Helvetica)."""
+    if not isinstance(text, str):
+        text = str(text)
+
+    replacements = {
+        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+        'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'
+    }
+    for pl, lat in replacements.items():
+        text = text.replace(pl, lat)
+
+    nfkd_form = unicodedata.normalize('NFKD', text)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+
+
+def create_chart_image(df_data):
+    """Generuje wykres matplotlib i zwraca go jako bufor bajtów do wklejenia do PDF."""
+    plt.figure(figsize=(7, 3.2))
+    for col in df_data.columns:
+        clean_col = remove_polish_chars(col)
+        plt.plot(df_data.index, df_data[col], label=clean_col, linewidth=1.5)
+
+    plt.title(remove_polish_chars("Wykres zanieczyszczen (srednie godzinne)"), fontsize=9, fontweight='bold')
+    plt.xlabel(remove_polish_chars("Czas"), fontsize=8)
+    plt.ylabel(remove_polish_chars("Stzenie / Wartosc"), fontsize=8)
+    plt.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
+    plt.xticks(rotation=20, fontsize=7)
+    plt.yticks(fontsize=7)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+
+    img_buffer = io.BytesIO()
+    plt.savefig(img_buffer, format='png', dpi=150)
+    plt.close()
+    img_buffer.seek(0)
+    return img_buffer
+
+
 def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None):
     """
-    Uniwersalny generator raportów PDF dla dowolnego modułu w aplikacji.
-    Zwraca strumień bajtów (bytes) gotowy do pobrania w Streamlit.
+    Uniwersalny generator raportów PDF z usuniętymi polskimi znakami, średnimi godzinnymi i wykresem.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -29,46 +69,69 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     title_style = ParagraphStyle(
         'ReportTitle',
         parent=styles['Heading1'],
-        fontSize=15,
+        fontSize=14,
         textColor=colors.HexColor("#1b4332"),
-        spaceAfter=8
+        spaceAfter=6
     )
 
     subtitle_style = ParagraphStyle(
         'ReportSubtitle',
         parent=styles['Normal'],
-        fontSize=10,
+        fontSize=9,
         textColor=colors.HexColor("#555555"),
-        spaceAfter=12
+        spaceAfter=10
     )
 
     normal_style = ParagraphStyle(
         'NormalText',
         parent=styles['Normal'],
-        fontSize=9,
+        fontSize=8,
         textColor=colors.HexColor("#333333"),
         spaceAfter=4
     )
 
-    story.append(Paragraph(f"🌱 RDOŚ Monitoring - {title}", title_style))
-    story.append(Paragraph(subtitle, subtitle_style))
-    story.append(Spacer(1, 6))
+    # Czyszczenie tytułu i podtytułu z polskich znaków
+    clean_title = remove_polish_chars(title)
+    clean_subtitle = remove_polish_chars(subtitle)
 
-    # Sekcja z dodatkowymi metadanymi / parametrami
+    story.append(Paragraph(f"RDOS Monitoring - {clean_title}", title_style))
+    story.append(Paragraph(clean_subtitle, subtitle_style))
+    story.append(Spacer(1, 4))
+
     if details_dict:
         for k, v in details_dict.items():
-            story.append(Paragraph(f"<b>{k}:</b> {v}", normal_style))
-        story.append(Spacer(1, 8))
+            ck = remove_polish_chars(str(k))
+            cv = remove_polish_chars(str(v))
+            story.append(Paragraph(f"<b>{ck}:</b> {cv}", normal_style))
+        story.append(Spacer(1, 6))
 
-    # Tabela z danymi (jeśli dostarczono DataFrame)
+    # Przetwarzanie DataFrame (średnie godzinne i generowanie wykresu)
     if df_data is not None and not df_data.empty:
-        display_df = df_data.copy()
-        if isinstance(display_df.index, pd.DatetimeIndex):
-            display_df.reset_index(inplace=True)
-            date_col = display_df.columns[0]
-            display_df[date_col] = pd.to_datetime(display_df[date_col]).dt.strftime('%Y-%m-%d %H:%M')
+        df_processed = df_data.copy()
 
-        table_data = [display_df.columns.tolist()] + display_df.astype(str).values.tolist()
+        # Agregacja do średnich godzinnych, jeśli indeks to daty
+        if isinstance(df_processed.index, pd.DatetimeIndex):
+            df_processed = df_processed.resample('H').mean().dropna(how='all')
+
+        # Dodawanie wykresu do PDF
+        try:
+            img_buf = create_chart_image(df_processed)
+            story.append(Image(img_buf, width=450, height=200))
+            story.append(Spacer(1, 8))
+        except Exception as e:
+            print(f"Blod generowania wykresu do PDF: {e}")
+
+        # Przygotowanie danych do tabeli
+        df_table = df_processed.copy()
+        df_table.reset_index(inplace=True)
+        date_col = df_table.columns[0]
+        df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%Y-%m-%d %H:00')
+
+        # Zmiana nazw kolumn na wersje bez polskich znaków
+        new_columns = [remove_polish_chars(col) for col in df_table.columns]
+        df_table.columns = new_columns
+
+        table_data = [df_table.columns.tolist()] + df_table.astype(str).values.tolist()
 
         t = Table(table_data, hAlign='CENTER')
         t.setStyle(TableStyle([
@@ -76,11 +139,11 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 5),
+            ('FONTSIZE', (0, 0), (-1, 0), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
             ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f8f9fa")),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            ('FONTSIZE', (0, 1), (-1, -1), 6),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f3f5")])
         ]))
 
