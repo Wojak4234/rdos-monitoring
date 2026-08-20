@@ -3,6 +3,7 @@ import pandas as pd
 import datetime
 import requests
 import urllib.parse
+import json
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -229,33 +230,41 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (System Fallback - Bezpośrednio -> Proxy) ---
+# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (POTRÓJNY SYSTEM OMIJANIA BLOKAD) ---
 
 def fetch_with_fallback(target_url):
-    """Pomocnicza funkcja, która próbuje połączyć się na kilka sposobów, omijając blokady."""
+    """Próbuje połączyć się z GIOŚ na 3 różne sposoby, aby ominąć firewalle."""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    # 1. Próba bezpośrednia (szybka)
+    # 1. Próba bezpośrednia (może się udać, jeśli IP nie jest akurat na czarnej liście)
     try:
-        response = requests.get(target_url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass  # Jeśli zablokują IP lub timeout, lecimy dalej w milczeniu
+        r = requests.get(target_url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except:
+        pass
 
-    # 2. Próba przez bramkę corsproxy.io (wydajniejsza niż allorigins)
+    # 2. Próba przez stabilne proxy deweloperskie (Codetabs)
+    try:
+        r = requests.get(f"https://api.codetabs.com/v1/proxy?quest={target_url}", timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except:
+        pass
+
+    # 3. Ostateczność: Allorigins w trybie JSON wrap (ukrywa odpowiedź w swoim JSON-ie)
     try:
         encoded_url = urllib.parse.quote(target_url, safe='')
-        proxy_url = f"https://corsproxy.io/?{encoded_url}"
-        response = requests.get(proxy_url, headers=headers, timeout=25)
-        response.raise_for_status()
-        return response.json()
+        r = requests.get(f"https://api.allorigins.win/get?url={encoded_url}", timeout=10)
+        if r.status_code == 200:
+            return json.loads(r.json()['contents'])
     except Exception as e:
         raise Exception(
-            f"Serwery GIOŚ odrzuciły wszystkie próby połączenia (bezpośrednie i przez bramkę). Odczekaj chwilę. Błąd: {e}")
+            f"GIOŚ odrzucił wszystkie próby zapytań (403). System rządowy jest wyjątkowo szczelny dla serwerów w chmurze. Błąd: {e}")
+
+    raise Exception("GIOŚ zablokował połączenie. Spróbuj ponownie za chwilę.")
 
 
 def get_gios_stations():
