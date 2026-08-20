@@ -1,5 +1,6 @@
 import ee
 import pandas as pd
+import datetime
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -55,13 +56,53 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
         return None
 
 
-def get_atmospheric_layer(target_date, parameter):
+def get_available_dates(parameter, days_back=60):
+    """Przeszukuje bazę GEE i zwraca listę dostępnych dat dla wybranego gazu z ostatnich X dni"""
     try:
-        # Granice woj. zachodniopomorskiego z bazy FAO
+        if parameter == "NO2 (Dwutlenek azotu)":
+            col = 'L3_NO2'
+        elif parameter == "SO2 (Dwutlenek siarki)":
+            col = 'L3_SO2'
+        elif parameter == "CO (Tlenek węgla)":
+            col = 'L3_CO'
+        elif parameter == "Aerozole (Smog / Pyły)":
+            col = 'L3_AER_AI'
+        else:
+            return []
+
+        # Liczymy daty: od dzisiaj do 'days_back' dni wstecz
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=days_back)
+
         region = ee.FeatureCollection("FAO/GAUL/2015/level1") \
             .filter(ee.Filter.eq('ADM1_NAME', 'Zachodniopomorskie'))
 
-        # Ograniczenie do 1 konkretnego dnia
+        s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
+            .filterDate(str(start_date), str(end_date)) \
+            .filterBounds(region)
+
+        # Funkcja wydobywająca daty z metadanych zdjęć
+        def get_date(image):
+            return ee.Feature(None, {'date': image.date().format('YYYY-MM-dd')})
+
+        # Zbieramy dane do lokalnego Pythona i wyciągamy unikalne daty
+        dates_info = s5p.map(get_date).getInfo()
+        valid_dates = set()
+        for feat in dates_info.get('features', []):
+            valid_dates.add(feat['properties']['date'])
+
+        # Zwracamy posortowaną listę (od najnowszych do najstarszych)
+        return sorted(list(valid_dates), reverse=True)
+    except Exception as e:
+        print(f"Błąd wyszukiwania dat: {e}")
+        return []
+
+
+def get_atmospheric_layer(target_date, parameter):
+    try:
+        region = ee.FeatureCollection("FAO/GAUL/2015/level1") \
+            .filter(ee.Filter.eq('ADM1_NAME', 'Zachodniopomorskie'))
+
         start = ee.Date(target_date)
         end = start.advance(1, 'day')
 
@@ -81,7 +122,7 @@ def get_atmospheric_layer(target_date, parameter):
             .filterBounds(region) \
             .select(band) \
             .mean() \
-            .clip(region)  # Przycięcie mapy do granic województwa
+            .clip(region)
 
         s5p_high = s5p.updateMask(s5p.gt(threshold))
 
