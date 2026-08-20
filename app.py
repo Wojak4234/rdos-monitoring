@@ -3,8 +3,10 @@ import folium
 import pandas as pd
 import json
 import branca.colormap as cm
+import pyproj
 from streamlit_folium import st_folium
-from shapely.geometry import shape
+from shapely.ops import transform
+from shapely.geometry import shape, Point, LineString, mapping
 
 from gee_auth import init_gee
 from data_loader import load_data
@@ -15,7 +17,7 @@ from satellite_analysis import (
     get_parameter_info,
     get_s2_water_dates,
     get_water_quality_layer,
-    get_osm_data
+    get_osm_data_bbox
 )
 
 st.set_page_config(layout="wide")
@@ -231,7 +233,7 @@ if init_gee():
         elif modul == "Dane wektorowe (OSM)":
             st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
             st.markdown(
-                "Wybierz obszar Natura 2000, który posłuży jako centrum wyszukiwania, a następnie określ, jakich obiektów szukasz w jego pobliżu.")
+                "Wyznaczony zostanie geometryczny bufor wokół całego obszaru Natura 2000, co pozwoli na precyzyjne wycięcie obiektów w jego otulinie.")
 
             typ_osm = st.radio("Z jakiej bazy wybieramy obszar referencyjny?", ("PLB (Ptaki)", "PLH (Siedliska)"))
             active_data_osm = data_plb if "PLB" in typ_osm else data_plh
@@ -240,85 +242,116 @@ if init_gee():
                 f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
                 for f in active_data_osm["features"]
             ]
-            wybrany_osm = st.selectbox("Wybierz obszar Natura 2000 jako centrum poszukiwań:",
-                                       sorted(list(set(names_osm))))
+            wybrany_osm = st.selectbox("Wybierz obszar Natura 2000:", sorted(list(set(names_osm))))
 
             feat_osm = next(
                 f for f in active_data_osm["features"]
                 if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany_osm
             )
 
-            # Pobieramy środek wielokąta
-            geom_osm = shape(feat_osm["geometry"])
-            center_lat = geom_osm.centroid.y
-            center_lon = geom_osm.centroid.x
-
             col1, col2 = st.columns(2)
             with col1:
-                promien = st.slider("Promień poszukiwań wokół obszaru (w metrach):", min_value=1000, max_value=20000,
+                promien = st.slider("Rozmiar bufora wokół granic obszaru (w metrach):", min_value=1000, max_value=20000,
                                     value=5000, step=1000)
             with col2:
                 kategoria_osm = st.selectbox(
-                    "Czego szukamy?",
+                    "Czego szukamy w otulinie?",
                     ("Pomniki przyrody", "Rezerwaty przyrody", "Użytki ekologiczne",
                      "Przejścia dla zwierząt (ekodukty)")
                 )
 
-            if st.button("Szukaj w bazie OSM"):
-                with st.spinner(f"Wysyłam zapytanie do serwerów Overpass API (Promień: {promien}m)..."):
+            if st.button("Generuj strefę buforową i wyszukaj"):
+                with st.spinner(f"Krok 1/3: Transformacja obszaru i generowanie {promien}m strefy buforowej..."):
                     try:
-                        osm_results = get_osm_data(center_lat, center_lon, promien, kategoria_osm)
-                        elements = osm_results.get("elements", [])
+                        geom_osm = shape(feat_osm["geometry"])
 
-                        m_osm = folium.Map(location=[center_lat, center_lon], zoom_start=11)
+                        # Profesjonalny pipeline GIS:
+                        # 1. Przerzucamy z WGS84 na PUWG 1992 (EPSG:2180) dla rzetelnego przeliczenia metrów
+                        project_to_2180 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2180",
+                                                                      always_xy=True).transform
+                        project_to_4326 = pyproj.Transformer.from_crs("EPSG:2180", "EPSG:4326",
+                                                                      always_xy=True).transform
 
-                        # Wizualizacja centralnego obszaru referencyjnego
-                        folium.GeoJson(
-                            feat_osm,
-                            style_function=lambda x: {'color': 'gray', 'fillOpacity': 0.1, 'weight': 2}
-                        ).add_to(m_osm)
+                        geom_2180 = transform(project_to_2180, geom_osm)
+                        buffered_2180 = geom_2180.buffer(promien)  # Bufor na całym wielokącie!
+                        buffered_4326 = transform(project_to_4326, buffered_2180)
 
-                        # Rysowanie niebieskiego okręgu symbolizującego strefę buforową
-                        folium.Circle(
-                            location=[center_lat, center_lon],
-                            radius=promien,
-                            color='blue',
-                            fill=True,
-                            fill_opacity=0.05
-                        ).add_to(m_osm)
-
-                        # Rysowanie pobranych wyników z bazy na mapie
-                        if elements:
-                            for el in elements:
-                                name = el.get("tags", {}).get("name", "Brak nazwy w bazie")
-
-                                if el["type"] == "node":
-                                    lat, lon = el["lat"], el["lon"]
-                                    folium.Marker([lat, lon], tooltip=name,
-                                                  icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
-
-                                elif el["type"] in ["way", "relation"] and "geometry" in el:
-                                    coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
-                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
-                                        m_osm)
-
-                            st.success(f"Sukces! Znaleziono obiektów w tym promieniu: {len(elements)}")
-                        else:
-                            st.warning("Nie znaleziono żadnych obiektów tej kategorii w podanym promieniu.")
-
-                        st_folium(m_osm, width=1100, height=600, returned_objects=[])
-
-                        # Przycisk do eksportu wyciągniętych danych
-                        if elements:
-                            json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
-                            st.download_button(
-                                label="📥 Pobierz znalezione wektory jako surowy JSON",
-                                data=json_string.encode('utf-8'),
-                                file_name=f"osm_wyniki_{kategoria_osm.replace(' ', '_')}.json",
-                                mime="application/json"
-                            )
+                        # 2. Wyznaczamy zewnętrzny Bounding Box dla zapytania
+                        min_lon, min_lat, max_lon, max_lat = buffered_4326.bounds
 
                     except Exception as e:
-                        st.error(f"Wystąpił błąd podczas pobierania danych przestrzennych: {e}")
+                        st.error(f"Błąd geoprocessingu (czy zainstalowałeś pyproj?): {e}")
+                        st.stop()
+
+                with st.spinner(f"Krok 2/3: Pobieranie danych wektorowych ze skanowanego Bounding Boxa..."):
+                    try:
+                        osm_results = get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, kategoria_osm)
+                        elements = osm_results.get("elements", [])
+                    except Exception as e:
+                        st.error(str(e))
+                        st.stop()
+
+                with st.spinner(
+                        "Krok 3/3: Topologiczne cięcie wyników (zostawiamy obiekty wyłącznie przecinające bufor)..."):
+                    filtered_elements = []
+
+                    for el in elements:
+                        geom_osm_el = None
+                        # Konwertujemy odpowiedź OSM na geometrię Shapely
+                        if el["type"] == "node":
+                            geom_osm_el = Point(el["lon"], el["lat"])
+                        elif el["type"] in ["way", "relation"] and "geometry" in el:
+                            coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
+                            if len(coords) >= 2:
+                                geom_osm_el = LineString(coords)
+
+                        # Magia przestrzenna: zostawiamy to co się przecina
+                        if geom_osm_el and buffered_4326.intersects(geom_osm_el):
+                            filtered_elements.append(el)
+
+                    m_osm = folium.Map(location=[geom_osm.centroid.y, geom_osm.centroid.x], zoom_start=10)
+
+                    # Wizualizacja oryginalnego obszaru Natura 2000
+                    folium.GeoJson(
+                        feat_osm,
+                        style_function=lambda x: {'color': 'black', 'fillOpacity': 0.4, 'weight': 2}
+                    ).add_to(m_osm)
+
+                    # Wizualizacja naszego precyzyjnego bufora
+                    folium.GeoJson(
+                        mapping(buffered_4326),
+                        style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1, 'weight': 2, 'dashArray': '5, 5'}
+                    ).add_to(m_osm)
+
+                    # Nakładanie tylko odfiltrowanych obiektów
+                    if filtered_elements:
+                        for el in filtered_elements:
+                            name = el.get("tags", {}).get("name", "Brak nazwy")
+
+                            if el["type"] == "node":
+                                folium.Marker([el["lat"], el["lon"]], tooltip=name,
+                                              icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
+
+                            elif el["type"] in ["way", "relation"] and "geometry" in el:
+                                coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+                                folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(m_osm)
+
+                        st.success(
+                            f"Sukces! Znaleziono obiekty (szt. {len(filtered_elements)}) przecinające wyznaczoną strefę buforową.")
+                    else:
+                        st.warning("Nie znaleziono żadnych obiektów w granicach samej strefy buforowej.")
+
+                    st_folium(m_osm, width=1100, height=600, returned_objects=[])
+
+                    if filtered_elements:
+                        # Eksportujemy tylko i wyłącznie obiekty odfiltrowane!
+                        osm_results["elements"] = filtered_elements
+                        json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
+                        st.download_button(
+                            label="📥 Pobierz znalezione wektory jako surowy JSON",
+                            data=json_string.encode('utf-8'),
+                            file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
+                            mime="application/json"
+                        )
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")

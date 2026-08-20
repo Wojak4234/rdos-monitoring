@@ -195,28 +195,28 @@ def get_water_quality_layer(target_date):
         raise Exception(f"Błąd GEE (Water Quality): {str(e)}")
 
 
-def get_osm_data(lat, lon, radius, feature_type):
-    """Pobiera wektory z OpenStreetMap na podstawie promienia i typu obiektu."""
+def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
+    """Pobiera wektory z OpenStreetMap na podstawie okna Bounding Box."""
     try:
         tags = {
-            "Pomniki przyrody": 'nwr["denotation"="natural_monument"]',
-            "Rezerwaty przyrody": 'nwr["boundary"="protected_area"]["protect_class"="4"]',
-            "Użytki ekologiczne": 'nwr["boundary"="protected_area"]["protect_class"="6"]',
-            "Przejścia dla zwierząt (ekodukty)": 'nwr["bridge"="ecoduct"]'
+            "Pomniki przyrody": '["denotation"="natural_monument"]',
+            "Rezerwaty przyrody": '["boundary"="protected_area"]["protect_class"="4"]',
+            "Użytki ekologiczne": '["boundary"="protected_area"]["protect_class"="6"]',
+            "Przejścia dla zwierząt (ekodukty)": '["bridge"="ecoduct"]'
         }
-        tag = tags.get(feature_type, 'nwr["denotation"="natural_monument"]')
+        tag = tags.get(feature_type, '["denotation"="natural_monument"]')
 
         query = f"""
         [out:json][timeout:25];
         (
-          {tag}(around:{radius},{lat},{lon});
+          node{tag}({min_lat},{min_lon},{max_lat},{max_lon});
+          way{tag}({min_lat},{min_lon},{max_lat},{max_lon});
+          relation{tag}({min_lat},{min_lon},{max_lat},{max_lon});
         );
         out geom;
         """
 
         url = "https://overpass-api.de/api/interpreter"
-
-        # DODANO NAGŁÓWKI: Przedstawiamy się i określamy format akceptowanych danych
         headers = {
             'User-Agent': 'RDOS-Monitoring-App/1.0',
             'Accept': 'application/json'
