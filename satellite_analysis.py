@@ -228,19 +228,25 @@ def get_osm_data_bbox(min_lat, min_lon, max_lat, max_lon, feature_type):
         raise Exception(f"Błąd połączenia z serwerami Overpass OSM: {str(e)}")
 
 
-# --- NOWE FUNKCJE DLA GIOŚ ---
+# --- ZAKTUALIZOWANE FUNKCJE DLA GIOŚ (Dodane Nagłówki i HTTPS) ---
 
 def get_gios_stations():
     """Pobiera listę stacji pomiarowych GIOŚ z Polski i filtruje woj. zachodniopomorskie."""
     try:
-        url = "http://api.gios.gov.pl/pjp-api/rest/station/findAll"
-        response = requests.get(url)
+        url = "https://api.gios.gov.pl/pjp-api/rest/station/findAll"
+
+        # Magiczny nagłówek udający prawdziwą przeglądarkę
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        }
+
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         stations = response.json()
 
         zachodniopomorskie_stations = []
         for s in stations:
-            # Weryfikacja struktury JSON, żeby uniknąć błędu KeyError, gdy brakuje danych
             if s.get('city') and s['city'].get('commune') and s['city']['commune'].get('provinceName'):
                 if s['city']['commune']['provinceName'].upper() == 'ZACHODNIOPOMORSKIE':
                     zachodniopomorskie_stations.append(s)
@@ -252,12 +258,17 @@ def get_gios_stations():
 def get_gios_aqi(station_id):
     """Odpytuje konkretną stację o aktualny Indeks Jakości Powietrza."""
     try:
-        url = f"http://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
-        response = requests.get(url)
+        url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        }
+
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
 
-        # Próba wyciągnięcia głównego indeksu lub zwrócenia informacji o braku
         if data.get('stIndexLevel') and data['stIndexLevel'].get('indexLevelName'):
             return data['stIndexLevel']['indexLevelName'], data.get('stCalcDate', 'Brak daty')
         else:
