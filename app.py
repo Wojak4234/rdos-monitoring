@@ -1,116 +1,78 @@
-import streamlit as st
-import folium
+import ee
 import pandas as pd
-from streamlit_folium import st_folium
-from shapely.geometry import shape
-import geemap.foliumap as geemap
+import folium
 
-from gee_auth import init_gee
-from data_loader import load_data
-from satellite_analysis import calculate_index_time_series, get_atmospheric_no2_data
 
-st.set_page_config(layout="wide")
-st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
+def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
+    try:
+        roi = ee.Geometry(geojson_feature['geometry'])
 
-if init_gee():
-    st.sidebar.header("Panel sterowania")
+        s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+            .filterBounds(roi) \
+            .filterDate(str(start_date), str(end_date)) \
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 25))
 
-    data_plb = load_data("PLB.geojson")
-    data_plh = load_data("PLH.geojson")
+        def process_image(img):
+            if index_type == "NDVI (Wegetacja)":
+                layer = img.normalizedDifference(['B8', 'B4']).rename('INDEX')
+            elif index_type == "NDWI (Woda / Mokradła)":
+                layer = img.normalizedDifference(['B3', 'B8']).rename('INDEX')
+            elif index_type == "NDMI (Wilgotność roślin)":
+                layer = img.normalizedDifference(['B8', 'B11']).rename('INDEX')
+            else:
+                layer = img.normalizedDifference(['B8', 'B4']).rename('INDEX')
 
-    if data_plb and data_plh:
-        # Wybór modułu głównego
-        modul = st.sidebar.radio("Wybierz moduł analizy:",
-                                 ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (NO2)"))
-
-        if modul == "Obszary Natura 2000 (Wskaźniki)":
-            typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
-            active_data = data_plb if "PLB" in typ else data_plh
-
-            names = [
-                f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
-                for f in active_data["features"]
-            ]
-            wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))))
-
-            if "last_wybrany" not in st.session_state or st.session_state["last_wybrany"] != wybrany:
-                st.session_state["last_wybrany"] = wybrany
-                st.session_state["df_ts"] = None
-
-            feat = next(
-                f for f in active_data["features"]
-                if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany
+            date_str = img.date().format('YYYY-MM-dd')
+            mean_dict = layer.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=roi,
+                scale=30,
+                maxPixels=1e8
             )
-            geom = shape(feat["geometry"])
+            return ee.Feature(None, {'date': date_str, 'VAL': mean_dict.get('INDEX')})
 
-            # Mapa główna
-            m = folium.Map(location=[geom.centroid.y, geom.centroid.x], zoom_start=11)
-            kolor = 'blue' if "PLB" in typ else 'green'
-            folium.GeoJson(
-                feat,
-                style_function=lambda x: {'color': kolor, 'fillOpacity': 0.3, 'weight': 3}
-            ).add_to(m)
+        ts_collection = s2.map(process_image)
+        info = ts_collection.getInfo()
 
-            st.sidebar.success(f"Wybrano: {wybrany}")
+        data = []
+        for feat in info.get('features', []):
+            props = feat['properties']
+            d = props.get('date')
+            val = props.get('VAL')
+            if d and val is not None:
+                data.append({'date': d, 'Wartość': val})
 
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("📈 Wybór wskaźnika satelitarnego")
-            selected_index = st.sidebar.selectbox(
-                "Wskaźnik:",
-                ("NDVI (Wegetacja)", "NDWI (Woda / Mokradła)", "NDMI (Wilgotność roślin)")
-            )
+        if not data:
+            return None
 
-            start_date = st.sidebar.date_input("Data początkowa", value=pd.to_datetime("2025-01-01"))
-            end_date = st.sidebar.date_input("Data końcowa", value=pd.to_datetime("2026-08-19"))
+        df = pd.DataFrame(data)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date')
+        df.set_index('date', inplace=True)
+        return df[['Wartość']]
 
-            if st.sidebar.button("Generuj wykres wskaźnika"):
-                with st.spinner(f"Pobieranie szeregu czasowego ({selected_index}) ze Sentinel-2..."):
-                    st.session_state["df_ts"] = calculate_index_time_series(feat, selected_index, start_date, end_date)
+    except Exception as e:
+        print(f"Błąd szeregu czasowego wskaźnika: {e}")
+        return None
 
-            if st.session_state.get("df_ts") is not None and not st.session_state["df_ts"].empty:
-                st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
-                st.line_chart(st.session_state["df_ts"])
 
-                # Przycisk eksportu do CSV
-                csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
-                st.download_button(
-                    label="📥 Pobierz dane wykresu do CSV",
-                    data=csv_data,
-                    file_name=f"analiza_{selected_index.split()[0]}_{wybrany}.csv",
-                    mime="text/csv",
-                )
-            elif st.session_state.get("df_ts") is not None and st.session_state["df_ts"].empty:
-                st.warning("Brak danych satelitarnych w wybranym przedziale. Spróbuj rozszerzyć zakres dat.")
+def get_atmospheric_no2_layer(start_date, end_date):
+    """Zwraca obiekt mapy EE dla NO2 do wyświetlenia w Folium"""
+    try:
+        s5p = ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2') \
+            .filterDate(str(start_date), str(end_date)) \
+            .select('tropospheric_NO2_column_number_density') \
+            .mean()
 
-            st_folium(m, width=1100, height=500)
+        no2_viz = {
+            'min': 0,
+            'max': 0.0002,
+            'palette': ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+        }
 
-        else:
-            # --- MODUŁ ZANIECZYSZCZEŃ (SENTINEL-5P / NO2) ---
-            st.header("🏭 Monitoring jakości powietrza i gazów śladowych (Sentinel-5P)")
-            st.markdown("Moduł prezentuje rozkład stężenia dwutlenku azotu ($NO_2$) w troposferze dla obszaru Polski.")
-
-            s_date = st.date_input("Okres od:", value=pd.to_datetime("2026-06-01"))
-            e_date = st.date_input("Okres do:", value=pd.to_datetime("2026-08-19"))
-
-            if st.button("Generuj mapę zanieczyszczeń NO2"):
-                with st.spinner("Przetwarzam dane atmosferyczne z chmury GEE..."):
-                    no2_image = get_atmospheric_no2_data(s_date, e_date)
-
-                    # Tworzenie interaktywnej mapy z geemap
-                    m_atm = geemap.Map(center=[52.0, 19.0], zoom=6)
-
-                    # Wizualizacja warstwy NO2 z paletą kolorów (od niebieskiego do czerwonego/wysokie zanieczyszczenie)
-                    no2_viz = {
-                        'min': 0,
-                        'max': 0.0002,
-                        'palette': ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
-                    }
-                    m_atm.addLayer(no2_image, no2_viz, 'Stężenie NO2')
-
-                    st.success("Mapa stężenia dwutlenku azotu została wygenerowana!")
-                    m_atm.to_streamlit(height=600)
-
-                    st.info(
-                        "💡 Najwyższe stężenia $NO_2$ z reguły korelują z dużymi aglomeracjami miejskimi, arteriami komunikacyjnymi o dużym natężeniu ruchu oraz okręgami przemysłowymi.")
-    else:
-        st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
+        # Konwersja obrazu GEE na kafelki Folium
+        map_id_dict = s5p.getMapId(no2_viz)
+        return map_id_dict['tile_fetcher'].url_format
+    except Exception as e:
+        print(f"Błąd pobierania warstwy S5P: {e}")
+        return None

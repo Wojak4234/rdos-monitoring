@@ -1,5 +1,6 @@
 import ee
 import pandas as pd
+import folium
 
 
 def calculate_index_time_series(geojson_feature, index_type, start_date, end_date):
@@ -15,9 +16,9 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
             if index_type == "NDVI (Wegetacja)":
                 layer = img.normalizedDifference(['B8', 'B4']).rename('INDEX')
             elif index_type == "NDWI (Woda / Mokradła)":
-                layer = img.normalizedDifference(['B3', 'B8']).rename('INDEX')  # Zielony i NIR
+                layer = img.normalizedDifference(['B3', 'B8']).rename('INDEX')
             elif index_type == "NDMI (Wilgotność roślin)":
-                layer = img.normalizedDifference(['B8', 'B11']).rename('INDEX')  # NIR i SWIR1
+                layer = img.normalizedDifference(['B8', 'B11']).rename('INDEX')
             else:
                 layer = img.normalizedDifference(['B8', 'B4']).rename('INDEX')
 
@@ -46,7 +47,6 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
 
         df = pd.DataFrame(data)
         df['date'] = pd.to_datetime(df['date'])
-        df['date_str'] = df['date'].dt.strftime('%Y-%m-%d')
         df = df.sort_values('date')
         df.set_index('date', inplace=True)
         return df[['Wartość']]
@@ -56,16 +56,23 @@ def calculate_index_time_series(geojson_feature, index_type, start_date, end_dat
         return None
 
 
-def get_atmospheric_no2_data(start_date, end_date):
-    """Pobiera dane stężenia NO2 z Sentinel-5P dla obszaru Polski / regionu"""
+def get_atmospheric_no2_layer(start_date, end_date):
+    """Zwraca obiekt mapy EE dla NO2 do wyświetlenia w Folium"""
     try:
-        # Zbiór Sentinel-5P Tropospheric NO2
         s5p = ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2') \
             .filterDate(str(start_date), str(end_date)) \
             .select('tropospheric_NO2_column_number_density') \
-            .mean()  # Średnia z wybranego okresu
+            .mean()
 
-        return s5p
+        no2_viz = {
+            'min': 0,
+            'max': 0.0002,
+            'palette': ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+        }
+
+        # Konwersja obrazu GEE na kafelki Folium
+        map_id_dict = s5p.getMapId(no2_viz)
+        return map_id_dict['tile_fetcher'].url_format
     except Exception as e:
-        print(f"Błąd pobierania danych S5P: {e}")
+        print(f"Błąd pobierania warstwy S5P: {e}")
         return None
