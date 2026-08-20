@@ -268,7 +268,6 @@ def get_gios_stations():
 
 
 def get_gios_aqi(station_id, lat=None, lon=None):
-    """Odpytuje GIOŚ. Jeśli zablokują, wylicza z modelu atmosferycznego Open-Meteo (Copernicus)."""
     try:
         target_url = f"https://api.gios.gov.pl/pjp-api/rest/aqindex/getIndex/{station_id}"
         data = fetch_with_fallback(target_url)
@@ -279,7 +278,6 @@ def get_gios_aqi(station_id, lat=None, lon=None):
             raise Exception("Brak danych GIOŚ")
 
     except Exception:
-        # ULTIMATE FALLBACK: API Open-Meteo Air Quality
         if lat and lon:
             try:
                 om_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=european_aqi"
@@ -304,3 +302,29 @@ def get_gios_aqi(station_id, lat=None, lon=None):
                 pass
 
         return "Brak danych z serwerów", "Brak daty"
+
+
+def get_historical_air_quality(lat, lon, past_days=3):
+    """Pobiera historyczne dane (PM10, PM2.5, NO2, Ozon) z modelu atmosferycznego."""
+    try:
+        url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=pm10,pm2_5,nitrogen_dioxide,ozone&past_days={past_days}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            df = pd.DataFrame(data['hourly'])
+            df['time'] = pd.to_datetime(df['time'])
+            df.set_index('time', inplace=True)
+
+            # Tłumaczenie i kosmetyka kolumn
+            df.rename(columns={
+                'pm10': 'PM10 (µg/m³)',
+                'pm2_5': 'PM2.5 (µg/m³)',
+                'nitrogen_dioxide': 'NO2 (µg/m³)',
+                'ozone': 'Ozon (µg/m³)'
+            }, inplace=True)
+
+            df = df.dropna()
+            return df
+    except Exception as e:
+        print(f"Błąd pobierania historii modeli: {e}")
+    return None

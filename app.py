@@ -19,7 +19,8 @@ from satellite_analysis import (
     get_water_quality_layer,
     get_osm_data_bbox,
     get_gios_stations,
-    get_gios_aqi
+    get_gios_aqi,
+    get_historical_air_quality
 )
 
 st.set_page_config(layout="wide")
@@ -185,50 +186,98 @@ if init_gee():
             st.markdown(
                 "Ten moduł łączy się na żywo z Głównym Inspektoratem Ochrony Środowiska. W przypadku blokady państwowych serwerów system automatycznie pobiera zastępcze dane modelowe z programu Copernicus (Open-Meteo) dla tych samych lokalizacji.")
 
-            if st.button("Pobierz aktualne dane ze stacji"):
-                with st.spinner("Odpytuję serwery pomiarowe..."):
+            # Używamy st.session_state, aby mapa nie znikała po każdym kliknięciu tabeli
+            if "gios_stations" not in st.session_state:
+                st.session_state["gios_stations"] = []
+
+            if st.button("Pobierz / Odśwież dane na mapie"):
+                with st.spinner("Odpytuję serwery pomiarowe (To może zająć kilkanaście sekund)..."):
                     try:
                         stations = get_gios_stations()
                         if stations:
-                            m_gios = folium.Map(location=[53.6, 15.6], zoom_start=8)
-
+                            # Odpytujemy od razu wszystkie stacje o ogólny stan, żeby narysować kolory na mapie
                             for s in stations:
-                                s_id = s['id']
-                                lat = float(s['gegrLat'])
-                                lon = float(s['gegrLon'])
-                                name = s['stationName']
-
-                                aqi_level, calc_date = get_gios_aqi(s_id, lat, lon)
-
-                                color = "gray"
-                                if "Bardzo dobry" in aqi_level:
-                                    color = "darkgreen"
-                                elif "Dobry" in aqi_level:
-                                    color = "green"
-                                elif "Umiarkowany" in aqi_level:
-                                    color = "orange"
-                                elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
-                                    color = "lightred"
-                                elif "Bardzo zły" in aqi_level:
-                                    color = "red"
-
-                                popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
-
-                                folium.Marker(
-                                    [lat, lon],
-                                    popup=folium.Popup(popup_html, max_width=300),
-                                    tooltip=name,
-                                    icon=folium.Icon(color=color, icon="info-sign")
-                                ).add_to(m_gios)
-
-                            st.success(
-                                f"Pobrano dane (GIOŚ / Model Satelitarny) dla {len(stations)} lokalizacji w województwie.")
-                            st_folium(m_gios, width=1100, height=600, returned_objects=[])
-
+                                aqi, date = get_gios_aqi(s['id'], float(s['gegrLat']), float(s['gegrLon']))
+                                s['aqi_level'] = aqi
+                                s['calc_date'] = date
+                            st.session_state["gios_stations"] = stations
+                            st.success(f"Pobrano pomyślnie wskaźniki ogólne dla {len(stations)} lokalizacji.")
                         else:
-                            st.warning("Nie znaleziono stacji dla wybranego województwa.")
+                            st.warning("Nie znaleziono stacji.")
                     except Exception as e:
                         st.error(str(e))
+
+            # Zawsze wyświetlaj mapę i tabelę, jeśli dane są już w pamięci podręcznej
+            stations_data = st.session_state.get("gios_stations", [])
+
+            if stations_data:
+                m_gios = folium.Map(location=[53.6, 15.6], zoom_start=8)
+
+                for s in stations_data:
+                    lat = float(s['gegrLat'])
+                    lon = float(s['gegrLon'])
+                    name = s['stationName']
+                    aqi_level = s['aqi_level']
+                    calc_date = s['calc_date']
+
+                    color = "gray"
+                    if "Bardzo dobry" in aqi_level:
+                        color = "darkgreen"
+                    elif "Dobry" in aqi_level:
+                        color = "green"
+                    elif "Umiarkowany" in aqi_level:
+                        color = "orange"
+                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
+                        color = "lightred"
+                    elif "Bardzo zły" in aqi_level:
+                        color = "red"
+
+                    popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
+
+                    folium.Marker(
+                        [lat, lon],
+                        popup=folium.Popup(popup_html, max_width=300),
+                        tooltip=name,
+                        icon=folium.Icon(color=color, icon="info-sign")
+                    ).add_to(m_gios)
+
+                st_folium(m_gios, width=1100, height=500, returned_objects=[])
+
+                # --- NOWA SEKCJA SZCZEGÓŁOWA ---
+                st.markdown("---")
+                st.subheader("📊 Szczegółowe dane zanieczyszczeń i historia (Wykres / Tabela)")
+
+                station_dict = {s['stationName']: s for s in stations_data}
+                selected_station = st.selectbox("Wybierz stację z mapy, aby wygenerować szczegóły:",
+                                                list(station_dict.keys()))
+
+                if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
+                    with st.spinner("Pobieram dane historyczne dla wybranych współrzędnych..."):
+                        sel_s = station_dict[selected_station]
+                        df_hist = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']),
+                                                             past_days=3)
+
+                        if df_hist is not None and not df_hist.empty:
+                            st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
+
+                            st.line_chart(df_hist)
+
+                            st.markdown("#### Tabela wyników (Najnowsze na górze)")
+                            # Wyciągamy ostatnie 24 godziny i odwracamy kolejność (iloc[::-1]), by najświeższe były na górze
+                            display_df = df_hist.tail(24).iloc[::-1]
+                            display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
+
+                            st.dataframe(display_df, use_container_width=True)
+
+                            csv_hist = display_df.to_csv().encode('utf-8')
+                            st.download_button(
+                                label="📥 Pobierz wyniki historyczne do CSV (Excel)",
+                                data=csv_hist,
+                                file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
+                                mime="text/csv"
+                            )
+                        else:
+                            st.error("Wystąpił problem z pobraniem danych historycznych z bazy.")
 
         # ---------------- MODUŁ 4: JAKOŚĆ WÓD (NDCI) ----------------
         elif modul == "Jakość Wód (Chlorofil-a)":
