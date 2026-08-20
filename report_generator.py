@@ -11,7 +11,7 @@ from reportlab.lib import colors
 
 
 def remove_polish_chars(text):
-    """Usuwa polskie znaki diakrytyczne."""
+    """Usuwa polskie znaki diakrytyczne dla kompatybilności z Helvetica w ReportLab."""
     if not isinstance(text, str): text = str(text)
     replacements = {'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
                     'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'}
@@ -19,40 +19,25 @@ def remove_polish_chars(text):
     return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
 
 
-def create_location_map_image(lat, lon, station_name):
-    """Generuje profesjonalny wycinek mapy z zaznaczoną stacją."""
-    plt.clf()  # Zresetuj wykres
-    plt.figure(figsize=(5, 3))
-    plt.plot(lon, lat, 'ro', markersize=10, label='Lokalizacja', zorder=10)
-    plt.text(lon + 0.02, lat + 0.02, remove_polish_chars(station_name), fontsize=9, fontweight='bold')
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.xlim(lon - 0.3, lon + 0.3)
-    plt.ylim(lat - 0.2, lat + 0.2)
-    plt.xlabel("Dlugosc [Lon]")
-    plt.ylabel("Szerokosc [Lat]")
-    plt.title(remove_polish_chars(f"Lokalizacja: {station_name}"), fontsize=10)
-    plt.tight_layout()
-
-    img_buffer = io.BytesIO()
-    plt.savefig(img_buffer, format='png', dpi=100)
-    plt.close()
-    img_buffer.seek(0)
-    return img_buffer
-
-
 def create_chart_image(df_data):
-    """Generuje wykres matplotlib ze średnimi godzinnymi."""
+    """Generuje czytelny wykres liniowy ze średnimi godzinnymi."""
     plt.clf()
-    plt.figure(figsize=(7, 3.0))
+    plt.figure(figsize=(7, 3.2))
     for col in df_data.columns:
         clean_col = remove_polish_chars(col)
         plt.plot(df_data.index, df_data[col], label=clean_col, linewidth=1.5, marker='o', markersize=3)
-    plt.title(remove_polish_chars("Wykres zanieczyszczen (srednie godzinne)"), fontsize=9)
+
+    plt.title(remove_polish_chars("Wykres zanieczyszczen (srednie godzinne)"), fontsize=9, fontweight='bold')
+    plt.xlabel(remove_polish_chars("Czas"), fontsize=8)
+    plt.ylabel(remove_polish_chars("Wartosc / Stzenie"), fontsize=8)
     plt.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
+    plt.xticks(rotation=25, fontsize=7)
+    plt.yticks(fontsize=7)
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
+
     img_buffer = io.BytesIO()
-    plt.savefig(img_buffer, format='png', dpi=100)
+    plt.savefig(img_buffer, format='png', dpi=150)
     plt.close()
     img_buffer.seek(0)
     return img_buffer
@@ -61,69 +46,116 @@ def create_chart_image(df_data):
 def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None, lat=None, lon=None,
                                 station_name="Obszar"):
     """
-    Uniwersalny generator raportów PDF.
+    Profesjonalny generator raportów PDF (bez amatorskich wykresów punktowych).
     """
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=30,
+        leftMargin=30,
+        topMargin=30,
+        bottomMargin=30
+    )
 
     story = []
     styles = getSampleStyleSheet()
 
-    # 1. Nagłówki
-    story.append(Paragraph(f"RDOS Monitoring - {remove_polish_chars(title)}", styles['Heading1']))
-    story.append(Paragraph(remove_polish_chars(subtitle), styles['Normal']))
-    story.append(Spacer(1, 12))
+    title_style = ParagraphStyle(
+        'ReportTitle',
+        parent=styles['Heading1'],
+        fontSize=13,
+        textColor=colors.HexColor("#1b4332"),
+        spaceAfter=4
+    )
 
-    # 2. Mapa
+    subtitle_style = ParagraphStyle(
+        'ReportSubtitle',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor("#555555"),
+        spaceAfter=10
+    )
+
+    normal_style = ParagraphStyle(
+        'NormalText',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=5
+    )
+
+    # 1. Nagłówek raportu
+    story.append(Paragraph(f"RDOS Monitoring - {remove_polish_chars(title)}", title_style))
+    story.append(Paragraph(remove_polish_chars(subtitle), subtitle_style))
+    story.append(Spacer(1, 4))
+
+    # 2. Blok informacji / metadanych (w tym lokalizacja tekstowa zamiast brzydkiej kropki)
     if lat is not None and lon is not None:
-        try:
-            map_buf = create_location_map_image(float(lat), float(lon), station_name)
-            story.append(Image(map_buf, width=300, height=180))
-            story.append(Spacer(1, 12))
-        except Exception as e:
-            print(f"Błąd mapy: {e}")
+        story.append(Paragraph(
+            f"<b>Lokalizacja / Wspolrzedne:</b> Szerokosc: {lat}, Dlugosc: {lon} ({remove_polish_chars(station_name)})",
+            normal_style))
 
-    # 3. Szczegóły
     if details_dict:
         for k, v in details_dict.items():
-            story.append(
-                Paragraph(f"<b>{remove_polish_chars(str(k))}:</b> {remove_polish_chars(str(v))}", styles['Normal']))
-        story.append(Spacer(1, 12))
+            ck = remove_polish_chars(str(k))
+            cv = remove_polish_chars(str(v))
+            story.append(Paragraph(f"<b>{ck}:</b> {cv}", normal_style))
+        story.append(Spacer(1, 8))
 
-    # 4. Wykres i Tabela (dane)
+    # 3. Wykres i Tabela danych (tylko dla danych pomiarowych / szeregów)
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
         try:
-            # Upewnij się, że indeks jest czasowy
             df_processed.index = pd.to_datetime(df_processed.index)
+            if df_processed.index.tz is not None:
+                df_processed.index = df_processed.index.tz_localize(None)
+
             # Rygorystyczne odcięcie przyszłości
             current_time = pd.Timestamp.now()
             df_processed = df_processed[df_processed.index <= current_time]
-            # Resample do godzin
+
+            # Średnie godzinne
             df_processed = df_processed.resample('h').mean().dropna(how='all')
         except Exception as e:
-            print(f"Błąd przetwarzania danych: {e}")
+            print(f"Blod przetwarzania danych w PDF: {e}")
 
         if not df_processed.empty:
-            # Dodaj wykres
+            # Dodanie wykresów
             try:
                 img_buf = create_chart_image(df_processed)
-                story.append(Image(img_buf, width=400, height=180))
-                story.append(Spacer(1, 12))
+                story.append(Image(img_buf, width=450, height=190))
+                story.append(Spacer(1, 10))
             except Exception as e:
-                print(f"Błąd wykresu: {e}")
+                print(f"Blod generowania wykresu do PDF: {e}")
 
-            # Dodaj tabelę
-            df_table = df_processed.reset_index()
-            df_table[df_table.columns[0]] = df_table[df_table.columns[0]].dt.strftime('%H:00 (%d.%m)')
-            df_table.columns = [remove_polish_chars(c) for c in df_table.columns]
+            # Przygotowanie tabeli
+            df_table = df_processed.copy()
+            df_table.reset_index(inplace=True)
+            date_col = df_table.columns[0]
+
+            try:
+                df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%H:00 (%d.%m)')
+            except Exception:
+                pass
+
+            new_columns = [remove_polish_chars(col) for col in df_table.columns]
+            df_table.columns = new_columns
 
             table_data = [df_table.columns.tolist()] + df_table.astype(str).values.tolist()
-            t = Table(table_data)
+
+            t = Table(table_data, hAlign='CENTER')
             t.setStyle(TableStyle([
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE', (0, 0), (-1, -1), 6),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f0f0"))
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2d6a4f")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f8f9fa")),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+                ('FONTSIZE', (0, 1), (-1, -1), 6),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f3f5")])
             ]))
             story.append(t)
 
