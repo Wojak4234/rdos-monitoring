@@ -198,7 +198,6 @@ def get_water_quality_layer(target_date):
 def get_osm_data(lat, lon, radius, feature_type):
     """Pobiera wektory z OpenStreetMap na podstawie promienia i typu obiektu."""
     try:
-        # Mapowanie wyboru z UI na zapytania w języku Overpass QL
         tags = {
             "Pomniki przyrody": 'nwr["denotation"="natural_monument"]',
             "Rezerwaty przyrody": 'nwr["boundary"="protected_area"]["protect_class"="4"]',
@@ -207,7 +206,6 @@ def get_osm_data(lat, lon, radius, feature_type):
         }
         tag = tags.get(feature_type, 'nwr["denotation"="natural_monument"]')
 
-        # [out:json] mówi bazie, by oddała dane, a 'out geom' od razu zwraca geometrię bez kombinowania
         query = f"""
         [out:json][timeout:25];
         (
@@ -217,7 +215,14 @@ def get_osm_data(lat, lon, radius, feature_type):
         """
 
         url = "https://overpass-api.de/api/interpreter"
-        response = requests.post(url, data={'data': query})
+
+        # DODANO NAGŁÓWKI: Przedstawiamy się i określamy format akceptowanych danych
+        headers = {
+            'User-Agent': 'RDOS-Monitoring-App/1.0',
+            'Accept': 'application/json'
+        }
+
+        response = requests.post(url, data={'data': query}, headers=headers)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
