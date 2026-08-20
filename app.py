@@ -25,20 +25,34 @@ from report_generator import generate_general_pdf_report
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
 hide_streamlit_style = """
 <style>
-/* Ukrywa górny pasek narzędzi i przycisk GitHub / Deploy */
-header {visibility: hidden;}
+/* Ukrycie paska nagłówka, menu i domyślnej stopki */
+[data-testid="stHeader"] {display: none !important;}
+[data-testid="stFooter"] {display: none !important;}
+[data-testid="stToolbar"] {display: none !important;}
+#MainMenu {visibility: hidden !important;}
+footer {visibility: hidden !important;}
 
-/* Ukrywa menu główne (hamburger menu w prawym górnym rogu) */
-#MainMenu {visibility: hidden;}
+/* Agresywne ukrywanie Streamlit Cloud Viewer Badge (profil i korona) */
+.viewerBadge_container,
+.viewerBadge_link,
+.styles_viewerBadge__1yG5_,
+div[class^="styles_viewerBadge"],
+div[class^="viewerBadge"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
 
-/* Ukrywa stopkę "Made with Streamlit" */
-footer {visibility: hidden;}
+/* Czasami Streamlit wrzuca to jako element w ramce iframe */
+iframe[title="Streamlit cloud badge"] {
+    display: none !important;
+}
 
-/* Ukrywa pływający badge profilowy / Streamlit Cloud w prawym dolnym rogu */
-.viewerBadge_container {display: none !important;}
-div[data-testid="stStatusWidget"] {visibility: hidden;}
-.styles_viewerBadge__1yG5_ {display: none !important;}
-[data-testid="stDecoration"] {display: none;}
+/* Niszczarka na cokolwiek co Streamlit przykleja na sztywno w prawym dolnym rogu */
+div[style*="bottom: 0px"][style*="right: 0px"][style*="position: fixed"] {
+    display: none !important;
+}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
