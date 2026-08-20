@@ -7,7 +7,8 @@ from shapely.geometry import shape
 
 from gee_auth import init_gee
 from data_loader import load_data
-from satellite_analysis import calculate_index_time_series, get_atmospheric_layer, get_available_dates
+from satellite_analysis import calculate_index_time_series, get_atmospheric_layer, get_available_dates, \
+    get_parameter_info
 
 st.set_page_config(layout="wide")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
@@ -110,7 +111,6 @@ if init_gee():
                 if st.button("Generuj mapę zanieczyszczeń"):
                     with st.spinner(f"Przetwarzanie mapy {selected_param} dla daty {selected_date_str}..."):
                         try:
-                            # Odbieramy 3 wartości zamiast jednej
                             tile_url, min_val, max_val = get_atmospheric_layer(selected_date_str, selected_param)
 
                             if tile_url:
@@ -125,7 +125,6 @@ if init_gee():
                                     opacity=0.6
                                 ).add_to(m_atm)
 
-                                # DODAWANIE LEGENDY (Colormap)
                                 colormap = cm.LinearColormap(
                                     colors=['yellow', 'orange', 'red', 'purple'],
                                     vmin=min_val,
@@ -136,13 +135,28 @@ if init_gee():
 
                                 folium.LayerControl().add_to(m_atm)
 
-                                st.success(f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
+                                st.success(
+                                    f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
                                 st_folium(m_atm, width=1100, height=600, returned_objects=[])
+
+                                # DODANO: Panel z informacjami o normach i progach
+                                param_info = get_parameter_info(selected_param)
+                                if param_info:
+                                    with st.expander("ℹ️ Jak czytać ten wynik? (Opis i progi ostrzegawcze)"):
+                                        st.markdown(f"**Co to jest?**<br>{param_info['opis']}", unsafe_allow_html=True)
+                                        st.markdown(
+                                            f"**Jak interpretować wartości na mapie?**<br>{param_info['normy']}",
+                                            unsafe_allow_html=True)
+                                        st.info(
+                                            "Pamiętaj: Pomiary satelitarne (zbierane z całej pionowej kolumny atmosfery) nie zawsze pokrywają się 1 do 1 z odczytami stacji naziemnych, które mierzą powietrze przy ziemi. Wyższe wartości satelitarne zawsze jednak świadczą o pogorszonej jakości środowiska na danym terenie.")
+
                             else:
                                 st.error("Nie udało się pobrać warstwy (prawdopodobnie brak danych po filtracji).")
                         except Exception as e:
-                            st.error(f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")
+                            st.error(
+                                f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")
             else:
-                st.warning("Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
+                st.warning(
+                    "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
