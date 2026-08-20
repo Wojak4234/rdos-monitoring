@@ -72,7 +72,6 @@ def get_available_dates(parameter, days_back=90):
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=days_back)
 
-        # Pojedynczy punkt (Szczecin/centrum regionu) dla błyskawicznego wyszukiwania
         point = ee.Geometry.Point([15.6, 53.6])
 
         s5p = ee.ImageCollection(f'COPERNICUS/S5P/OFFL/{col}') \
@@ -118,14 +117,12 @@ def get_atmospheric_layer(target_date, parameter):
         viz = {'min': threshold, 'max': max_val, 'palette': ['yellow', 'orange', 'red', 'purple']}
         map_id_dict = s5p_high.getMapId(viz)
 
-        # Zwracamy adres warstwy oraz wartości min/max do legendy
         return map_id_dict['tile_fetcher'].url_format, threshold, max_val
     except Exception as e:
         raise Exception(f"Błąd GEE: {str(e)}")
 
 
 def get_parameter_info(parameter):
-    """Zwraca słownik z opisem i normami dla danego gazu."""
     info = {
         "NO2 (Dwutlenek azotu)": {
             "opis": "Gaz powstający głównie w wyniku spalania paliw w pojazdach silnikowych (szczególnie dieslach) oraz w elektrowniach. Działa drażniąco na drogi oddechowe.",
@@ -145,3 +142,62 @@ def get_parameter_info(parameter):
         }
     }
     return info.get(parameter, {})
+
+
+# --- NOWE FUNKCJE DLA JAKOŚCI WÓD ---
+
+def get_s2_water_dates(days_back=90):
+    """Pobiera daty względnie bezchmurnych zdjęć S2 dla Zalewu Szczecińskiego."""
+    try:
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=days_back)
+
+        # Centralny punkt: Zalew Szczeciński / Odra
+        point = ee.Geometry.Point([14.4, 53.7])
+
+        s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+            .filterBounds(point) \
+            .filterDate(str(start_date), str(end_date)) \
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 35))
+
+        times = s2.aggregate_array('system:time_start').getInfo()
+
+        if not times:
+            return []
+
+        dates = pd.to_datetime(times, unit='ms').strftime('%Y-%m-%d').unique().tolist()
+        dates.sort(reverse=True)
+        return dates
+    except Exception as e:
+        raise Exception(f"Błąd GEE (S2 Water Dates): {str(e)}")
+
+
+def get_water_quality_layer(target_date):
+    """Generuje warstwę chlorofilu-a (NDCI) z maską wycinającą ląd."""
+    try:
+        start = ee.Date(target_date)
+        end = start.advance(1, 'day')
+        point = ee.Geometry.Point([14.4, 53.7])
+
+        # Mosaikujemy, aby uniknąć cięć między kafelkami satelity tego samego dnia
+        img = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+            .filterBounds(point) \
+            .filterDate(start, end) \
+            .mosaic()
+
+        # Krok 1: Definiujemy wodę (NDWI)
+        ndwi = img.normalizedDifference(['B3', 'B8'])
+        water_mask = ndwi.gt(0.1)  # Piksele > 0.1 to na 99% woda
+
+        # Krok 2: Obliczamy NDCI (chlorofil) i nakładamy maskę wodną
+        # NDCI formuła: (B5 - B4) / (B5 + B4)
+        ndci = img.normalizedDifference(['B5', 'B4']).updateMask(water_mask)
+
+        min_val = -0.1
+        max_val = 0.2
+        viz = {'min': min_val, 'max': max_val, 'palette': ['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red']}
+        map_id_dict = ndci.getMapId(viz)
+
+        return map_id_dict['tile_fetcher'].url_format, min_val, max_val
+    except Exception as e:
+        raise Exception(f"Błąd GEE (Water Quality): {str(e)}")

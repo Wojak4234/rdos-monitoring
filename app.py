@@ -7,8 +7,14 @@ from shapely.geometry import shape
 
 from gee_auth import init_gee
 from data_loader import load_data
-from satellite_analysis import calculate_index_time_series, get_atmospheric_layer, get_available_dates, \
-    get_parameter_info
+from satellite_analysis import (
+    calculate_index_time_series,
+    get_atmospheric_layer,
+    get_available_dates,
+    get_parameter_info,
+    get_s2_water_dates,
+    get_water_quality_layer
+)
 
 st.set_page_config(layout="wide")
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
@@ -20,9 +26,12 @@ if init_gee():
     data_plh = load_data("PLH.geojson")
 
     if data_plb and data_plh:
-        modul = st.sidebar.radio("Wybierz moduł analizy:",
-                                 ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (S5P)"))
+        modul = st.sidebar.radio(
+            "Wybierz moduł analizy:",
+            ("Obszary Natura 2000 (Wskaźniki)", "Zanieczyszczenie powietrza (S5P)", "Jakość Wód (Chlorofil-a)")
+        )
 
+        # ---------------- MODUŁ 1: NATURA 2000 ----------------
         if modul == "Obszary Natura 2000 (Wskaźniki)":
             typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
             active_data = data_plb if "PLB" in typ else data_plh
@@ -82,7 +91,8 @@ if init_gee():
 
             st_folium(m, width=1100, height=500, returned_objects=[])
 
-        else:
+        # ---------------- MODUŁ 2: POWIETRZE S5P ----------------
+        elif modul == "Zanieczyszczenie powietrza (S5P)":
             st.header("🏭 Monitoring jakości powietrza (Zachodniopomorskie)")
             st.markdown("Krok 1: Wybierz parametr gazowy. Krok 2: Wybierz z listy jedną z dostępnych dat.")
 
@@ -139,7 +149,6 @@ if init_gee():
                                     f"Warstwa {selected_param} dla daty {selected_date_str} została wygenerowana!")
                                 st_folium(m_atm, width=1100, height=600, returned_objects=[])
 
-                                # DODANO: Panel z informacjami o normach i progach
                                 param_info = get_parameter_info(selected_param)
                                 if param_info:
                                     with st.expander("ℹ️ Jak czytać ten wynik? (Opis i progi ostrzegawcze)"):
@@ -148,15 +157,68 @@ if init_gee():
                                             f"**Jak interpretować wartości na mapie?**<br>{param_info['normy']}",
                                             unsafe_allow_html=True)
                                         st.info(
-                                            "Pamiętaj: Pomiary satelitarne (zbierane z całej pionowej kolumny atmosfery) nie zawsze pokrywają się 1 do 1 z odczytami stacji naziemnych, które mierzą powietrze przy ziemi. Wyższe wartości satelitarne zawsze jednak świadczą o pogorszonej jakości środowiska na danym terenie.")
+                                            "Pamiętaj: Pomiary satelitarne (zbierane z całej pionowej kolumny atmosfery) nie zawsze pokrywają się 1 do 1 z odczytami stacji naziemnych.")
 
                             else:
                                 st.error("Nie udało się pobrać warstwy (prawdopodobnie brak danych po filtracji).")
                         except Exception as e:
-                            st.error(
-                                f"Wystąpił błąd silnika Earth Engine (możliwe gęste chmury lub brak odczytu dla tego punktu): {e}")
+                            st.error(f"Wystąpił błąd silnika Earth Engine: {e}")
             else:
                 st.warning(
-                    "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni. Spróbuj wybrać inny parametr.")
+                    "Niestety nie znaleziono żadnych zdjęć satelitarnych dla tego parametru w ciągu ostatnich 90 dni.")
+
+        # ---------------- MODUŁ 3: JAKOŚĆ WÓD (NDCI) ----------------
+        elif modul == "Jakość Wód (Chlorofil-a)":
+            st.header("💧 Monitoring jakości wód (Odra i Zalew Szczeciński)")
+            st.markdown(
+                "Śledzenie zakwitów glonów i sinic przy użyciu satelity Sentinel-2 i wskaźnika NDCI. Ląd został automatycznie zamaskowany.")
+
+            if "water_dates" not in st.session_state:
+                with st.spinner("Pobieram listę dostępnych, bezchmurnych dni dla Zalewu Szczecińskiego..."):
+                    try:
+                        st.session_state["water_dates"] = get_s2_water_dates(days_back=90)
+                    except Exception as e:
+                        st.error(f"Błąd komunikacji z GEE: {e}")
+                        st.session_state["water_dates"] = []
+
+            w_dates = st.session_state.get("water_dates", [])
+
+            if w_dates:
+                selected_water_date = st.selectbox("Wybierz datę bezchmurnego przelotu Sentinel-2:", w_dates)
+
+                if st.button("Generuj mapę zakwitów"):
+                    with st.spinner(f"Przeliczanie indeksu NDCI dla daty {selected_water_date}..."):
+                        try:
+                            tile_url, min_val, max_val = get_water_quality_layer(selected_water_date)
+
+                            if tile_url:
+                                # Startujemy wycentrowani idealnie na Zalew Szczeciński
+                                m_water = folium.Map(location=[53.7, 14.4], zoom_start=10)
+
+                                folium.TileLayer(
+                                    tiles=tile_url,
+                                    attr="Google Earth Engine - Sentinel-2 NDCI",
+                                    name="Chlorofil-a (NDCI)",
+                                    overlay=True,
+                                    control=True,
+                                    opacity=0.9  # Duża widoczność, bo woda to mały procent mapy
+                                ).add_to(m_water)
+
+                                colormap = cm.LinearColormap(
+                                    colors=['darkblue', 'blue', 'cyan', 'green', 'yellow', 'red'],
+                                    vmin=min_val,
+                                    vmax=max_val
+                                )
+                                colormap.caption = "Indeks NDCI (Im cieplejszy kolor, tym większy zakwit/chlorofil)"
+                                colormap.add_to(m_water)
+                                folium.LayerControl().add_to(m_water)
+
+                                st.success(
+                                    "Mapa chlorofilu została wygenerowana! (Ciemnoniebieski = woda czysta, Żółty/Czerwony = zakwity/dużo materii organicznej).")
+                                st_folium(m_water, width=1100, height=600, returned_objects=[])
+                        except Exception as e:
+                            st.error(f"Wystąpił błąd podczas analizy obrazu wodnego: {e}")
+            else:
+                st.warning("Nie znaleziono bezchmurnych zdjęć dla tego obszaru w ciągu ostatnich 90 dni.")
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
