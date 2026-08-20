@@ -27,17 +27,17 @@ def remove_polish_chars(text):
 
 
 def create_chart_image(df_data):
-    """Generuje wykres matplotlib i zwraca go jako bufor bajtów do wklejenia do PDF."""
+    """Generuje wykres matplotlib ze średnimi godzinnymi i zwraca go jako bufor bajtów do PDF."""
     plt.figure(figsize=(7, 3.2))
     for col in df_data.columns:
         clean_col = remove_polish_chars(col)
-        plt.plot(df_data.index, df_data[col], label=clean_col, linewidth=1.5)
+        plt.plot(df_data.index, df_data[col], label=clean_col, linewidth=1.5, marker='o', markersize=3)
 
     plt.title(remove_polish_chars("Wykres zanieczyszczen (srednie godzinne)"), fontsize=9, fontweight='bold')
-    plt.xlabel(remove_polish_chars("Czas"), fontsize=8)
+    plt.xlabel(remove_polish_chars("Godzina"), fontsize=8)
     plt.ylabel(remove_polish_chars("Stzenie / Wartosc"), fontsize=8)
     plt.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
-    plt.xticks(rotation=20, fontsize=7)
+    plt.xticks(rotation=30, fontsize=7)
     plt.yticks(fontsize=7)
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
@@ -51,7 +51,7 @@ def create_chart_image(df_data):
 
 def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None):
     """
-    Uniwersalny generator raportów PDF z usuniętymi polskimi znakami, średnimi godzinnymi i wykresem.
+    Uniwersalny generator raportów PDF z wymuszoną agregacją do średnich godzinnych i wykresem.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -107,10 +107,18 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
     if df_data is not None and not df_data.empty:
         df_processed = df_data.copy()
 
-        # Poprawka: użycie małej litery 'h' zamiast 'H' zgodnie z nowym standardem Pandas
+        # 1. Zabezpieczenie: Wymuszenie konwersji indeksu na DatetimeIndex
+        try:
+            if not isinstance(df_processed.index, pd.DatetimeIndex):
+                df_processed.index = pd.to_datetime(df_processed.index)
+        except Exception:
+            pass
+
+        # 2. Agregacja do pełnych godzin (średnie godzinne)
         if isinstance(df_processed.index, pd.DatetimeIndex):
             df_processed = df_processed.resample('h').mean().dropna(how='all')
 
+        # Generowanie wykresu ze średnich godzinnych
         try:
             img_buf = create_chart_image(df_processed)
             story.append(Image(img_buf, width=450, height=200))
@@ -118,10 +126,16 @@ def generate_general_pdf_report(title, subtitle, df_data=None, details_dict=None
         except Exception as e:
             print(f"Blod generowania wykresu do PDF: {e}")
 
+        # Przygotowanie tabeli
         df_table = df_processed.copy()
         df_table.reset_index(inplace=True)
         date_col = df_table.columns[0]
-        df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%Y-%m-%d %H:00')
+
+        # Formatowanie kolumny czasu do czystych godzin (np. "17:00 (20.08)")
+        try:
+            df_table[date_col] = pd.to_datetime(df_table[date_col]).dt.strftime('%H:00 (%d.%m)')
+        except Exception:
+            pass
 
         new_columns = [remove_polish_chars(col) for col in df_table.columns]
         df_table.columns = new_columns
