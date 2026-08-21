@@ -622,28 +622,30 @@ if init_gee():
             st.markdown("""
             Ten moduł łączy się z serwerami satelitarnymi i przeprowadza **błyskawiczną weryfikację anomalii** w regionie:
             * Skanuje jakość wód (Odrę i Zalew) pod kątem gwałtownego namnażania chlorofilu-a (ryzyko **złotej algi**).
-            * Bada spadek indeksu wilgotności (NDMI) pod kątem **błyskawicznej suszy** lub odcięcia dopływów.
-            * Weryfikuje stężenia gazów atmosferycznych pod kątem nielegalnych emisji i pożarów.
+            * Bada spadek indeksu wilgotności (NDMI) pod kątem **błyskawicznej suszy** we wszystkich obszarach **Natura 2000**.
+            * Weryfikuje stężenia gazów atmosferycznych i podaje współrzędne ewentualnych epicentrów zanieczyszczeń.
             """)
 
             st.markdown("---")
             if st.button("🔍 Wykonaj automatyczną inspekcję regionu", type="primary"):
                 with st.spinner(
-                        "Nawiązywanie połączenia z silnikiem GEE. Skanowanie regionu potrwa kilkanaście sekund..."):
+                        "Nawiązywanie połączenia z silnikiem GEE. Zaawansowane skanowanie przestrzenne może potrwać kilkanaście sekund..."):
                     try:
-                        alerts, warnings, ok_status = run_regional_inspection()
+                        # Przekazujemy wszystkie cechy Natura 2000 z bazy, aby móc je skanować!
+                        all_n2000_features = data_plb["features"] + data_plh["features"]
+                        alerts, warnings, ok_status = run_regional_inspection(all_n2000_features)
 
                         st.subheader("Wyniki skanowania satelitarnego:")
 
                         if alerts:
                             for a in alerts:
-                                st.error(f"🔴 **KRYTYCZNE:** {a}")
+                                st.error(f"🔴 {a}")
                         else:
                             st.success("🟢 Nie wykryto żadnych sygnatur krytycznych (Alertów 1. stopnia).")
 
                         if warnings:
                             for w in warnings:
-                                st.warning(f"🟠 **OSTRZEŻENIE:** {w}")
+                                st.warning(f"🟠 {w}")
 
                         if ok_status:
                             with st.expander("✅ Parametry w normie (Rozwiń, aby sprawdzić)"):
@@ -661,7 +663,7 @@ if init_gee():
 
                             pdf_alert = generate_general_pdf_report(
                                 title="RAPORT ALARMOWY - Wczesne Ostrzeganie",
-                                subtitle=f"Data inspekcji: {datetime.date.today()}",
+                                subtitle=f"Data inspekcji przestrzennej: {datetime.date.today()}",
                                 details_dict=dict_raport,
                                 lat=53.6, lon=15.6, station_name="Obszar Regionalny (Zachodniopomorskie)"
                             )
