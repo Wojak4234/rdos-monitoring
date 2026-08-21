@@ -6,13 +6,10 @@ from shapely.geometry import shape
 
 
 def run_regional_inspection(n2000_features=None):
-    """
-    Wykonuje skanowanie z poprawioną geolokalizacją,
-    filtrowaniem duplikatów N2000 oraz formatowaniem PDF (<b>).
-    """
     alerts = []
     warnings = []
     ok_status = []
+    map_data = []  # Tutaj będziemy zbierać koordynaty do wyrysowania na mapie!
 
     end_date = ee.Date(datetime.date.today().isoformat())
     region_zach = ee.Geometry.Rectangle([14.0, 52.6, 17.0, 54.6])
@@ -34,25 +31,29 @@ def run_regional_inspection(n2000_features=None):
                 band).getInfo()
 
             if val and val >= thr_warn:
-                # Rozwiązanie problemu "Brak dokładnych danych": szukamy pikseli w granicach 99% wartości maksymalnej
-                mask = img.gte(ee.Number(val).multiply(0.99))
+                # Elastyczny próg (95% z maxa), aby zniwelować błędy precyzji zmiennoprzecinkowej w GEE
+                mask = img.gte(ee.Number(val).multiply(0.95))
                 coords = ee.Image.pixelLonLat().updateMask(mask).reduceRegion(reducer=ee.Reducer.first(),
                                                                               geometry=region_zach,
                                                                               scale=5000).getInfo()
                 lat, lon = coords.get('latitude'), coords.get('longitude')
 
-                loc_str = f"Współrzędne: {lat:.4f}, {lon:.4f}" if lat else "Brak dokładnych danych geolokalizacyjnych"
+                loc_str = f"Współrzędne: {lat:.4f}, {lon:.4f}" if lat and lon else "Brak geolokalizacji"
+
+                if lat and lon:
+                    map_data.append(
+                        {'type': 'air', 'lat': lat, 'lon': lon, 'popup': f"Anomalia {name.split()[0]}: {val:.5f}",
+                         'color': 'purple'})
 
                 if val >= thr_alert:
                     alerts.append(
-                        f"<b>{name}:</b> Krytyczne stężenie! Zarejestrowane maksimum: <b>{val:.5f} mol/m²</b>. Lokalizacja epicentrum zanieczyszczeń: {loc_str}")
+                        f"**{name}:** Krytyczne stężenie! Zarejestrowane maksimum: **{val:.5f} mol/m²**. Epicentrum: {loc_str}")
                 else:
-                    warnings.append(
-                        f"<b>{name}:</b> Podwyższone stężenie (Maksimum: {val:.5f} mol/m²). Lokalizacja: {loc_str}")
+                    warnings.append(f"**{name}:** Podwyższone stężenie (Max: {val:.5f} mol/m²). Epicentrum: {loc_str}")
             elif val:
-                ok_status.append(f"<b>{name}:</b> W normie (Max: {val:.5f}).")
+                ok_status.append(f"**{name}:** W normie (Max: {val:.5f}).")
         except Exception as e:
-            print(f"Błąd S5P: {e}")
+            pass
 
     # ---------------------------------------------------------
     # 2. JAKOŚĆ WÓD (NDCI)
@@ -78,19 +79,21 @@ def run_regional_inspection(n2000_features=None):
                                                                               geometry=region_zach, scale=100).getInfo()
                 lat, lon = coords.get('latitude'), coords.get('longitude')
 
-                loc_str = f"Współrzędne: {lat:.4f}, {lon:.4f}" if lat else ""
+                loc_str = f"Współrzędne: {lat:.4f}, {lon:.4f}" if lat and lon else ""
+                if lat and lon:
+                    map_data.append({'type': 'water', 'lat': lat, 'lon': lon, 'popup': f"Zakwit NDCI: {max_ndci:.3f}",
+                                     'color': 'darkblue'})
 
                 if max_ndci > 0.12:
                     alerts.append(
-                        f"<b>Wody powierzchniowe (Chlorofil-a):</b> Ekstremalnie wysoki wskaźnik NDCI (<b>{max_ndci:.3f}</b>). Bardzo wysokie ryzyko masowego zakwitu toksycznych glonów (np. złotej algi). Wskazana pilna inspekcja w miejscu: {loc_str}")
+                        f"**Wody powierzchniowe (Chlorofil-a):** Ekstremalnie wysoki NDCI (**{max_ndci:.3f}**). Ryzyko masowego zakwitu toksycznych glonów (np. złotej algi). {loc_str}")
                 else:
                     warnings.append(
-                        f"<b>Wody powierzchniowe:</b> Podwyższony chlorofil-a (NDCI: {max_ndci:.3f}). Zwiększona masa materii organicznej. {loc_str}")
+                        f"**Wody powierzchniowe:** Podwyższony chlorofil-a (NDCI: {max_ndci:.3f}). {loc_str}")
             elif max_ndci:
-                ok_status.append(
-                    f"<b>Jakość wód (NDCI):</b> Stabilna, brak sygnatur rozległych zakwitów (Max NDCI w regionie: {max_ndci:.3f}).")
+                ok_status.append(f"**Jakość wód (NDCI):** Stabilna, brak sygnatur zakwitów (Max NDCI: {max_ndci:.3f}).")
     except Exception as e:
-        print(f"Błąd Wody: {e}")
+        pass
 
     # ---------------------------------------------------------
     # 3. WILGOTNOŚĆ (NDMI) i N2000
@@ -98,10 +101,12 @@ def run_regional_inspection(n2000_features=None):
     try:
         if n2000_features:
             points = []
+            features_dict = {}
             for f in n2000_features:
                 name = f['properties'].get('nazwa', f['properties'].get('SITE_NAME', 'Nieznany Obszar'))
                 c = shape(f['geometry']).centroid
                 points.append(ee.Feature(ee.Geometry.Point([c.x, c.y]), {'name': name}))
+                features_dict[name] = (c.y, c.x)
 
             fc = ee.FeatureCollection(points)
 
@@ -114,41 +119,43 @@ def run_regional_inspection(n2000_features=None):
             start_moisture = mid_date.advance(-15, 'day')
             s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED').filterBounds(region_zach)
 
-            recent_ndmi = s2.filterDate(mid_date, end_date).median().normalizedDifference(['B8', 'B11']).rename('NDMI')
-            past_ndmi = s2.filterDate(start_moisture, mid_date).median().normalizedDifference(['B8', 'B11']).rename(
-                'NDMI')
-
+            recent_ndmi = s2.filterDate(mid_date, end_date).median().normalizedDifference(['B8', 'B11'])
+            past_ndmi = s2.filterDate(start_moisture, mid_date).median().normalizedDifference(['B8', 'B11'])
             diff = recent_ndmi.subtract(past_ndmi)
             results = diff.reduceRegions(collection=fc_buf, reducer=ee.Reducer.mean(), scale=100).getInfo()
 
-            # SŁOWNIK: Filtruje wielokrotne poligony tego samego obszaru N2000
             anomalies_dict = {}
             for feat in results.get('features', []):
                 d = feat['properties'].get('mean')
                 n = feat['properties'].get('name')
                 if d is not None and d < -0.05:
-                    if n not in anomalies_dict or d < anomalies_dict[n]:  # Zapisuje tylko największy spadek
+                    if n not in anomalies_dict or d < anomalies_dict[n]:
                         anomalies_dict[n] = d
 
             anomalies = list(anomalies_dict.items())
-
             if anomalies:
                 anomalies.sort(key=lambda x: x[1])
                 worst_name, worst_val = anomalies[0]
 
+                # Dodaj epicentrum suszy do mapy
+                lat_c, lon_c = features_dict.get(worst_name, (None, None))
+                if lat_c and lon_c:
+                    map_data.append({'type': 'drought', 'lat': lat_c, 'lon': lon_c,
+                                     'popup': f"Susza: {worst_name} (Δ{worst_val:.2f})", 'color': 'orange'})
+
                 if worst_val < -0.15:
                     alerts.append(
-                        f"<b>Błyskawiczna Susza (Natura 2000):</b> Obszar <b>{worst_name}</b> odnotował drastyczny spadek wilgotności (spadek NDMI o {worst_val:.3f} w ciągu 15 dni). Zagrożenie hydrologiczne / obumieranie siedlisk!")
+                        f"**Błyskawiczna Susza (Natura 2000):** Obszar **{worst_name}** wykazuje drastyczny spadek wilgotności (Δ {worst_val:.3f}).")
                 elif worst_val < -0.10:
                     warnings.append(
-                        f"<b>Przesuszenie (Natura 2000):</b> Obszar <b>{worst_name}</b> wykazuje znaczący spadek wilgotności (Δ NDMI {worst_val:.3f}).")
+                        f"**Przesuszenie (Natura 2000):** Obszar **{worst_name}** wykazuje znaczący spadek wilgotności (Δ {worst_val:.3f}).")
 
                 if len(anomalies) > 1:
-                    other_sites = ", ".join([f"{x[0]} (Δ{x[1]:.2f})" for x in anomalies[1:5]])
-                    warnings.append(f"<b>Inne obszary N2000 z największymi spadkami wilgotności:</b> {other_sites}")
+                    other_sites = ", ".join([f"{x[0]} (Δ{x[1]:.2f})" for x in anomalies[1:4]])
+                    warnings.append(f"**Kolejne przesuszone obszary N2000:** {other_sites}")
             else:
-                ok_status.append("<b>Obszary Natura 2000:</b> Stabilna wilgotność ekosystemów w skali regionu.")
+                ok_status.append("**Obszary Natura 2000:** Stabilna wilgotność w skali regionu.")
     except Exception as e:
-        print(f"Błąd N2000 NDMI: {e}")
+        pass
 
-    return alerts, warnings, ok_status
+    return alerts, warnings, ok_status, map_data

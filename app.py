@@ -616,62 +616,89 @@ if init_gee():
                     except Exception as e:
                         st.error(f"Błąd: {e}")
 
-        # ---------------- MODUŁ 6: SZYBKA INSPEKCJA (ALERTY) ----------------
+        # ---------------- MODUŁ 6: SZYBKA INSPEKCJA (ALERTY + MAPA) ----------------
         elif modul == "🚨 Szybka Inspekcja (Alerty)":
-            st.header("🚨 System Wczesnego Ostrzegania (Early Warning System)")
+            st.header("🚨 Zintegrowany System Wczesnego Ostrzegania")
             st.markdown("""
-            Ten moduł łączy się z serwerami satelitarnymi i przeprowadza **błyskawiczną weryfikację anomalii** w regionie:
-            * Skanuje jakość wód (Odrę i Zalew) pod kątem gwałtownego namnażania chlorofilu-a (ryzyko **złotej algi**).
-            * Bada spadek indeksu wilgotności (NDMI) pod kątem **błyskawicznej suszy** we wszystkich obszarach **Natura 2000**.
-            * Weryfikuje stężenia gazów atmosferycznych i podaje współrzędne ewentualnych epicentrów zanieczyszczeń.
+            Ten moduł w czasie rzeczywistym skanuje całe województwo zachodniopomorskie:
+            * Skan satelitarny jakości wód (złota alga) i suszy na obszarach N2000.
+            * Weryfikacja anomalii stężeń gazów atmosferycznych.
+            * **NOWOŚĆ:** Połączenie z API państwowych stacji GIOŚ pod kątem krytycznego smogu.
             """)
 
             st.markdown("---")
-            if st.button("🔍 Wykonaj automatyczną inspekcję regionu", type="primary"):
-                with st.spinner(
-                        "Nawiązywanie połączenia z silnikiem GEE. Zaawansowane skanowanie przestrzenne może potrwać kilkanaście sekund..."):
+            if st.button("🔍 Rozpocznij pełen skan regionu", type="primary"):
+                with st.spinner("Skanowanie wielowarstwowe GEE i API GIOŚ potrwa około 20 sekund..."):
                     try:
-                        # Przekazujemy wszystkie cechy Natura 2000 z bazy, aby móc je skanować!
-                        all_n2000_features = data_plb["features"] + data_plh["features"]
-                        alerts, warnings, ok_status = run_regional_inspection(all_n2000_features)
+                        all_n2000 = data_plb["features"] + data_plh["features"]
+                        alerts, warnings, ok_status, map_data = run_regional_inspection(all_n2000)
 
-                        st.subheader("Wyniki skanowania satelitarnego:")
+                        # Pobieranie danych naziemnych (API GIOŚ) dla zachodniopomorskiego
+                        try:
+                            gios_stations = get_gios_stations()
+                            for s in gios_stations:
+                                lat, lon = float(s['gegrLat']), float(s['gegrLon'])
+                                if 52.6 <= lat <= 54.6 and 14.0 <= lon <= 17.0:  # Zachodniopomorskie
+                                    aqi, _ = get_gios_aqi(s['id'], lat, lon)
+                                    if aqi and ("Zły" in aqi or "Bardzo zły" in aqi):
+                                        alerts.append(
+                                            f"**Stacja Naziemna GIOŚ ({s['stationName']}):** Zanotowano awaryjny stan powietrza: {aqi}!")
+                                        map_data.append({'type': 'gios', 'lat': lat, 'lon': lon,
+                                                         'popup': f"Stacja GIOŚ ({s['stationName']}) - Smog: {aqi}",
+                                                         'color': 'darkred'})
+                        except Exception as e:
+                            print(f"Błąd GIOŚ w module alertów: {e}")
 
+                        st.subheader("Wyniki integracji danych przestrzennych:")
+
+                        # Generowanie mapy alertów
+                        if map_data:
+                            st.markdown("### 🗺️ Mapa lokalizacji epicentrów i anomalii")
+                            m_alerts = folium.Map(location=[53.6, 15.6], zoom_start=8)
+
+                            for point in map_data:
+                                folium.Marker(
+                                    [point['lat'], point['lon']],
+                                    popup=folium.Popup(point['popup'], max_width=300),
+                                    icon=folium.Icon(color=point['color'], icon="exclamation-sign")
+                                ).add_to(m_alerts)
+
+                            st_folium(m_alerts, width=1100, height=450, returned_objects=[])
+
+                        st.markdown("---")
                         if alerts:
-                            for a in alerts:
-                                st.error(f"🔴 {a}")
+                            for a in alerts: st.error(a)
                         else:
-                            st.success("🟢 Nie wykryto żadnych sygnatur krytycznych (Alertów 1. stopnia).")
+                            st.success("🟢 Brak alertów krytycznych 1. stopnia.")
 
                         if warnings:
-                            for w in warnings:
-                                st.warning(f"🟠 {w}")
+                            for w in warnings: st.warning(w)
 
                         if ok_status:
-                            with st.expander("✅ Parametry w normie (Rozwiń, aby sprawdzić)"):
-                                for ok in ok_status:
-                                    st.info(ok)
+                            with st.expander("✅ Parametry stabilne w regionie"):
+                                for ok in ok_status: st.info(ok)
 
                         if alerts or warnings:
                             st.markdown("---")
-                            st.info(
-                                "Pobierz wygenerowany dziennik ostrzeżeń do przedłożenia służbom ochrony środowiska.")
 
+                            # Oczyszczanie słownika z Markdownu dla czystego PDF
                             dict_raport = {}
-                            for idx, a in enumerate(alerts): dict_raport[f"Alert Krytyczny {idx + 1}"] = a
-                            for idx, w in enumerate(warnings): dict_raport[f"Ostrzezenie {idx + 1}"] = w
+                            for idx, a in enumerate(alerts): dict_raport[f"Alert Krytyczny {idx + 1}"] = a.replace("**",
+                                                                                                                   "")
+                            for idx, w in enumerate(warnings): dict_raport[f"Ostrzezenie {idx + 1}"] = w.replace("**",
+                                                                                                                 "")
 
                             pdf_alert = generate_general_pdf_report(
-                                title="RAPORT ALARMOWY - Wczesne Ostrzeganie",
+                                title="RAPORT ALARMOWY - Ostrzeganie Wielozrodlowe",
                                 subtitle=f"Data inspekcji przestrzennej: {datetime.date.today()}",
                                 details_dict=dict_raport,
                                 lat=53.6, lon=15.6, station_name="Obszar Regionalny (Zachodniopomorskie)"
                             )
-                            st.download_button("📥 Pobierz Dziennik Alertów PDF", pdf_alert, "raport_alarmowy.pdf",
+                            st.download_button("📥 Pobierz Dziennik Alertów PDF", pdf_alert, "raport_zintegrowany.pdf",
                                                "application/pdf")
 
                     except Exception as e:
-                        st.error(f"Wystąpił problem z silnikiem GEE podczas skanowania: {e}")
+                        st.error(f"Wystąpił problem: {e}")
 
     else:
-        st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
+        st.error("Upewnij się, że pliki PLB i PLH znajdują się w folderze głównym!")
