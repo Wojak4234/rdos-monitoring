@@ -23,8 +23,10 @@ from gee_processor import (
     get_s2_water_dates, get_water_quality_layer
 )
 from report_generator import generate_general_pdf_report
+from inspector import run_regional_inspection
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
+
 custom_style_and_footer = """
 <style>
 /* Ukrycie TYLKO prawego menu i przycisku Deploy w nagłówku, aby strzałka panelu bocznego ocalała */
@@ -32,7 +34,7 @@ header [data-testid="stAppDeployButton"] {display: none !important;}
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 
-/* Agresywne ukrywanie wszystkiego w prawym dolnym rogu */
+/* Agresywne ukrywanie wszystkiego w prawym dolnym rogu (w tym ramek iframe wstrzykiwanych przez Streamlit Cloud) */
 iframe[src*="badge"] {display: none !important;}
 iframe[title*="Streamlit"] {display: none !important;}
 div[style*="position: fixed"][style*="bottom:"][style*="right:"] {display: none !important; opacity: 0 !important; pointer-events: none !important;}
@@ -59,6 +61,7 @@ div[style*="position: fixed"][style*="bottom:"][style*="right:"] {display: none 
     Wykonano na potrzeby RDOŚ Monitoring | Wykonał: Wojciech Świątek
 </div>
 """
+st.markdown(custom_style_and_footer, unsafe_allow_html=True)
 
 st.title("🌱 RDOŚ Monitoring - Ekosystemy i Atmosfera")
 
@@ -75,7 +78,8 @@ if init_gee():
                 "Zanieczyszczenie powietrza (S5P)",
                 "Pomiary naziemne (GIOŚ)",
                 "Jakość Wód (Chlorofil-a)",
-                "Dane wektorowe (OSM)"
+                "Dane wektorowe (OSM)",
+                "🚨 Szybka Inspekcja (Alerty)"
             )
         )
 
@@ -197,7 +201,6 @@ if init_gee():
                         try:
                             gee_result = get_atmospheric_layer(selected_date_str, selected_param)
 
-                            # Uodpornienie na brak miniatury w starym gee_processor.py
                             if len(gee_result) == 4:
                                 tile_url, min_val, max_val, thumb_url = gee_result
                             else:
@@ -612,5 +615,61 @@ if init_gee():
                                 )
                     except Exception as e:
                         st.error(f"Błąd: {e}")
+
+        # ---------------- MODUŁ 6: SZYBKA INSPEKCJA (ALERTY) ----------------
+        elif modul == "🚨 Szybka Inspekcja (Alerty)":
+            st.header("🚨 System Wczesnego Ostrzegania (Early Warning System)")
+            st.markdown("""
+            Ten moduł łączy się z serwerami satelitarnymi i przeprowadza **błyskawiczną weryfikację anomalii** w regionie:
+            * Skanuje jakość wód (Odrę i Zalew) pod kątem gwałtownego namnażania chlorofilu-a (ryzyko **złotej algi**).
+            * Bada spadek indeksu wilgotności (NDMI) pod kątem **błyskawicznej suszy** lub odcięcia dopływów.
+            * Weryfikuje stężenia gazów atmosferycznych pod kątem nielegalnych emisji i pożarów.
+            """)
+
+            st.markdown("---")
+            if st.button("🔍 Wykonaj automatyczną inspekcję regionu", type="primary"):
+                with st.spinner(
+                        "Nawiązywanie połączenia z silnikiem GEE. Skanowanie regionu potrwa kilkanaście sekund..."):
+                    try:
+                        alerts, warnings, ok_status = run_regional_inspection()
+
+                        st.subheader("Wyniki skanowania satelitarnego:")
+
+                        if alerts:
+                            for a in alerts:
+                                st.error(f"🔴 **KRYTYCZNE:** {a}")
+                        else:
+                            st.success("🟢 Nie wykryto żadnych sygnatur krytycznych (Alertów 1. stopnia).")
+
+                        if warnings:
+                            for w in warnings:
+                                st.warning(f"🟠 **OSTRZEŻENIE:** {w}")
+
+                        if ok_status:
+                            with st.expander("✅ Parametry w normie (Rozwiń, aby sprawdzić)"):
+                                for ok in ok_status:
+                                    st.info(ok)
+
+                        if alerts or warnings:
+                            st.markdown("---")
+                            st.info(
+                                "Pobierz wygenerowany dziennik ostrzeżeń do przedłożenia służbom ochrony środowiska.")
+
+                            dict_raport = {}
+                            for idx, a in enumerate(alerts): dict_raport[f"Alert Krytyczny {idx + 1}"] = a
+                            for idx, w in enumerate(warnings): dict_raport[f"Ostrzezenie {idx + 1}"] = w
+
+                            pdf_alert = generate_general_pdf_report(
+                                title="RAPORT ALARMOWY - Wczesne Ostrzeganie",
+                                subtitle=f"Data inspekcji: {datetime.date.today()}",
+                                details_dict=dict_raport,
+                                lat=53.6, lon=15.6, station_name="Obszar Regionalny (Zachodniopomorskie)"
+                            )
+                            st.download_button("📥 Pobierz Dziennik Alertów PDF", pdf_alert, "raport_alarmowy.pdf",
+                                               "application/pdf")
+
+                    except Exception as e:
+                        st.error(f"Wystąpił problem z silnikiem GEE podczas skanowania: {e}")
+
     else:
         st.error("Upewnij się, że pliki PLB.geojson i PLH.geojson znajdują się w folderze głównym projektu!")
