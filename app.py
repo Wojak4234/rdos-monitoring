@@ -24,6 +24,8 @@ from gee_processor import (
 )
 from report_generator import generate_general_pdf_report
 from inspector import run_regional_inspection
+# IMPORT NOWEGO MODUŁU ZASOLENIA
+from zasolenie_fetcher import renderuj_modul_zasolenia
 
 st.set_page_config(layout="wide", page_title="RDOŚ Monitoring")
 
@@ -78,6 +80,7 @@ if init_gee():
                 "Zanieczyszczenie powietrza (S5P)",
                 "Pomiary naziemne (GIOŚ)",
                 "Jakość Wód (Chlorofil-a)",
+                "Zasolenie (Zalew Szczeciński)",  # NOWA OPCJA W MENU
                 "Dane wektorowe (OSM)",
                 "🚨 Szybka Inspekcja (Alerty)"
             )
@@ -498,7 +501,11 @@ if init_gee():
             else:
                 st.warning("Brak bezchmurnych zdjęć w wybranym okresie.")
 
-        # ---------------- MODUŁ 5: DANE WEKTOROWE (OSM) ----------------
+        # ---------------- MODUŁ 5: ZASOLENIE (NOWY MODUŁ) ----------------
+        elif modul == "Zasolenie (Zalew Szczeciński)":
+            renderuj_modul_zasolenia()
+
+        # ---------------- MODUŁ 6: DANE WEKTOROWE (OSM) ----------------
         elif modul == "Dane wektorowe (OSM)":
             st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
             typ_osm = st.radio("Z jakiej bazy wybieramy obszar?", ("PLB (Ptaki)", "PLH (Siedliska)"))
@@ -616,7 +623,7 @@ if init_gee():
                     except Exception as e:
                         st.error(f"Błąd: {e}")
 
-        # ---------------- MODUŁ 6: SZYBKA INSPEKCJA (ALERTY + MAPA) ----------------
+        # ---------------- MODUŁ 7: SZYBKA INSPEKCJA (ALERTY + MAPA) ----------------
         elif modul == "🚨 Szybka Inspekcja (Alerty)":
             st.header("🚨 Zintegrowany System Wczesnego Ostrzegania")
             st.markdown("""
