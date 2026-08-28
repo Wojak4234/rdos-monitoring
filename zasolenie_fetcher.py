@@ -4,7 +4,6 @@ from streamlit_folium import st_folium
 import pandas as pd
 import datetime
 import os
-import unicodedata
 import xarray as xr
 import copernicusmarine
 import geopandas as gpd
@@ -17,32 +16,10 @@ import io
 import base64
 from branca.element import Template, MacroElement
 
-# Słownik konfiguracyjny dla różnych parametrów hydrofizycznych
-KONFIGURACJA_PARAMETROW = {
-    "so": {
-        "nazwa": "Zasolenie",
-        "jednostka": "PSU",
-        "cmap": "jet",
-        "legend_colors": ['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
-                          '#7f0000']
-    },
-    "zos": {
-        "nazwa": "Poziom lustra wody",
-        "jednostka": "m",
-        "cmap": "coolwarm",
-        "legend_colors": ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
-                          '#d73027']
-    }
-}
-
-
-def usun_polskie_znaki(tekst):
-    nfkd_form = unicodedata.normalize('NFKD', tekst)
-    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-
 
 @st.cache_data(ttl=86400)
-def pobierz_rzeczywiste_dane(zmienna="so"):
+def pobierz_rzeczywiste_zasolenie():
+    """Pobiera wyłącznie dane siatkowe dla maski, bez sztucznych stacji."""
     siatka_gradientu = []
     status_maski = "brak"
     zalew_gdf = None
@@ -58,12 +35,13 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
         )
         ostatni_czas = ds.isel(time=-1)
 
-        bbox_ds = ostatni_czas[zmienna].sel(
+        # Pobieranie BBOX
+        bbox_ds = ostatni_czas['so'].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
         ).isel(depth=0)
 
-        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
+        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -78,7 +56,7 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
 
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
-                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[zmienna]
+                "lat": row['latitude'], "lon": row['longitude'], "psu": row['so']
             })
 
         return siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski, zalew_gdf, df_do_mapy
@@ -87,7 +65,8 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
 
 
 @st.cache_data(ttl=86400)
-def pobierz_szereg_czasowy_30_dni(zmienna="so"):
+def pobierz_szereg_czasowy_30_dni():
+    """Pobiera średnie zasolenie z ostatnich 30 dni dla wyciętego obszaru"""
     try:
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
@@ -97,8 +76,8 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
         )
 
         ostatnie_30 = ds.isel(time=slice(-30, None))
-        bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(depth=0)
-        df = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
+        bbox_ds = ostatnie_30['so'].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(depth=0)
+        df = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -108,10 +87,8 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
             clipped = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
             df = clipped
 
-        szereg = df.groupby('time')[zmienna].mean().reset_index()
-        jednostka = KONFIGURACJA_PARAMETROW[zmienna]["jednostka"]
-        nazwa = KONFIGURACJA_PARAMETROW[zmienna]["nazwa"]
-        szereg.rename(columns={'time': 'Data', zmienna: f'Średni {nazwa} ({jednostka})'}, inplace=True)
+        szereg = df.groupby('time')['so'].mean().reset_index()
+        szereg.rename(columns={'time': 'Data', 'so': 'Średnie Zasolenie (PSU)'}, inplace=True)
         szereg['Data'] = szereg['Data'].dt.date
         return szereg
     except Exception:
@@ -119,39 +96,28 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
 
 
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Hydrofizyczne (CMEMS)")
+    st.header("🌊 Monitorowanie Zasolenia (Dane Rzeczywiste CMEMS)")
 
-    wybrany_parametr_opcja = st.radio(
-        "Wybierz parametr przestrzenny do analizy:",
-        options=["Zasolenie wody", "Poziom lustra wody (przejezdność terenu)"],
-        horizontal=True
-    )
-
-    if "Zasolenie" in wybrany_parametr_opcja:
-        parametr = "so"
-    else:
-        parametr = "zos"
-
-    konf = KONFIGURACJA_PARAMETROW[parametr]
-
-    with st.spinner(f"Przetwarzanie zapytań NetCDF dla parametru: {konf['nazwa']}..."):
-        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_dane(parametr)
+    with st.spinner("Przetwarzanie zapytań przestrzennych NetCDF..."):
+        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_zasolenie()
 
     if not siatka_gradientu:
         st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP.")
         return
 
-    vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
+    # --- WYLICZENIE STATYSTYK DLA OBSZARU Z DUŻĄ DOKŁADNOŚCIĄ ---
+    vals_array = np.array([p["psu"] for p in siatka_gradientu])
     val_min = float(vals_array.min())
     val_max = float(vals_array.max())
     val_mean = float(vals_array.mean())
 
     st.success(f"✅ Poligon wczytany. Zaktualizowano na dzień: {data_modelu}")
 
+    # Karty KPI o wysokiej rozdzielczości dziesiętnej
     c1, c2, c3 = st.columns(3)
-    c1.metric(f"Minimalny {konf['nazwa'].lower()}", f"{val_min:.5f} {konf['jednostka']}")
-    c2.metric(f"Średni {konf['nazwa'].lower()}", f"{val_mean:.5f} {konf['jednostka']}")
-    c3.metric(f"Maksymalny {konf['nazwa'].lower()}", f"{val_max:.5f} {konf['jednostka']}")
+    c1.metric("Minimalne zasolenie", f"{val_min:.5f} PSU")
+    c2.metric("Średnie zasolenie", f"{val_mean:.5f} PSU")
+    c3.metric("Maksymalne zasolenie", f"{val_max:.5f} PSU")
 
     st.subheader("🗺️ Analityczna mapa gradientowa (Interpolacja Cubic)")
     m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="OpenStreetMap")
@@ -160,6 +126,7 @@ def renderuj_modul_zasolenia():
         lats = np.array([p["lat"] for p in siatka_gradientu])
         lons = np.array([p["lon"] for p in siatka_gradientu])
 
+        # Pobranie granic poligonu
         if status_maski == "zaladowana":
             minx, miny, maxx, maxy = zalew_gdf.total_bounds
         else:
@@ -174,6 +141,7 @@ def renderuj_modul_zasolenia():
         grid_vals_near = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
         grid_vals = np.where(np.isnan(grid_vals_smooth), grid_vals_near, grid_vals_smooth)
 
+        # Maskowanie - przycięcie obrazka IDEALNIE do obrysu poligonu
         if status_maski == "zaladowana":
             pts = np.vstack((grid_lon.flatten(), grid_lat.flatten())).T
             mask = np.zeros(pts.shape[0], dtype=bool)
@@ -189,7 +157,7 @@ def renderuj_modul_zasolenia():
         ax.axis('off')
         fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
-        contour = ax.contourf(grid_lon, grid_lat, grid_vals, levels=50, cmap=konf['cmap'], alpha=0.65)
+        contour = ax.contourf(grid_lon, grid_lat, grid_vals, levels=50, cmap='jet', alpha=0.65)
 
         img_buf = io.BytesIO()
         plt.savefig(img_buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0)
@@ -202,9 +170,10 @@ def renderuj_modul_zasolenia():
             image=f"data:image/png;base64,{img_base64}",
             bounds=img_bounds,
             opacity=0.75,
-            name=f"Gradient - {konf['nazwa']}"
+            name="Gradient zasolenia"
         ).add_to(m_zas)
 
+        # --- DODANIE INTERAKTYWNOŚCI (HOVER Z WARTOŚCIAMI 6 CYFR) ---
         if df_piksle is not None:
             for idx, row in df_piksle.iterrows():
                 folium.CircleMarker(
@@ -214,9 +183,10 @@ def renderuj_modul_zasolenia():
                     fill=True,
                     fill_color='transparent',
                     fill_opacity=0,
-                    tooltip=f"Węzeł modelu:<br><b>{row[parametr]:.6f} {konf['jednostka']}</b>"
+                    tooltip=f"Węzeł modelu:<br><b>{row['so']:.6f} PSU</b>"
                 ).add_to(m_zas)
 
+    # Obrysowanie konturów Zalewu
     if status_maski == "zaladowana":
         folium.GeoJson(
             "zalew_maska.geojson",
@@ -224,15 +194,14 @@ def renderuj_modul_zasolenia():
             style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
         ).add_to(m_zas)
 
-    kolory_str = ", ".join([f"{kolor} {i * 12.5}%" for i, kolor in enumerate(konf['legend_colors'])])
-
+    # --- PIONOWA LEGENDA HTML/CSS ---
     macro_html = f"""
     {{% macro html(this, kwargs) %}}
     <div style="
         position: fixed; 
         bottom: 50px;
         right: 50px;
-        width: 140px;
+        width: 130px;
         height: 280px;
         z-index:9999;
         font-size:13px;
@@ -243,10 +212,12 @@ def renderuj_modul_zasolenia():
         padding: 10px;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
         ">
-        <b>{konf['nazwa']}<br>[{konf['jednostka']}]</b><br><br>
+        <b>Zasolenie<br>[PSU]</b><br><br>
         <div style="display: flex; flex-direction: row; height: 180px;">
             <div style="
-                background: linear-gradient(to top, {kolory_str});
+                background: linear-gradient(to top, 
+                    #00007f 0%, #0000ff 12.5%, #007fff 25%, #00ffff 37.5%, 
+                    #7fff7f 50%, #ffff00 62.5%, #ff7f00 75%, #ff0000 87.5%, #7f0000 100%);
                 width: 25px;
                 height: 100%;
                 border: 1px solid #555;
@@ -270,30 +241,31 @@ def renderuj_modul_zasolenia():
     st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
     # ---------------------------------------------------------
-    # 2. SEKCJA ANALIZY CZASOWEJ
+    # 2. SEKCJA ANALIZY CZASOWEJ (OSTATNIE 30 DNI)
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader(f"📈 Dynamika zmian - {konf['nazwa']} (Ostatnie 30 dni)")
+    st.subheader("📈 Dynamika zasolenia estuarium (Ostatnie 30 dni)")
 
     with st.spinner("Pobieranie i agregacja danych z ostatniego miesiąca..."):
-        szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
+        szereg_df = pobierz_szereg_czasowy_30_dni()
 
     if szereg_df is not None:
-        st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#d73027")
+        st.line_chart(szereg_df.set_index('Data'), color="#007fff")
     else:
         st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
 
     # ---------------------------------------------------------
-    # 3. SEKCJA RAPORTU Z WEZŁÓW SIATKI
+    # 3. SEKCJA RAPORTU Z WEZŁÓW SIATKI (Zamiast sztucznych punktów)
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader(f"📊 Raport danych przestrzennych - {konf['nazwa']} (Eksport Excel)")
+    st.subheader("📊 Raport danych przestrzennych siatki modelu (Eksport Excel)")
 
-    df_eksport = df_piksle[['latitude', 'longitude', parametr]].copy()
+    # Przygotowanie pełnych danych z siatki przestrzennej
+    df_eksport = df_piksle[['latitude', 'longitude', 'so']].copy()
     df_eksport.rename(columns={
         'latitude': 'Szerokosc Geograficzna',
         'longitude': 'Dlugosc Geograficzna',
-        parametr: f"{usun_polskie_znaki(konf['nazwa'])} ({konf['jednostka']})"
+        'so': 'Zasolenie (PSU)'
     }, inplace=True)
     df_eksport.reset_index(drop=True, inplace=True)
 
@@ -308,6 +280,6 @@ def renderuj_modul_zasolenia():
         st.download_button(
             label="📥 Pobierz węzły siatki (CSV)",
             data=csv_data,
-            file_name=f"{parametr}_siatka_{data_modelu}.csv",
+            file_name=f"zasolenie_siatka_{data_modelu}.csv",
             mime="text/csv"
         )
