@@ -4,6 +4,7 @@ from streamlit_folium import st_folium
 import pandas as pd
 import datetime
 import os
+import unicodedata
 import xarray as xr
 import copernicusmarine
 import geopandas as gpd
@@ -120,14 +121,12 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
 def renderuj_modul_zasolenia():
     st.header("🌊 Monitorowanie Hydrofizyczne (CMEMS)")
 
-    # Przełącznik analityczny
     wybrany_parametr_opcja = st.radio(
         "Wybierz parametr przestrzenny do analizy:",
         options=["Zasolenie wody", "Poziom lustra wody (przejezdność terenu)"],
         horizontal=True
     )
 
-    # Mapowanie wyboru na zmienne NetCDF
     if "Zasolenie" in wybrany_parametr_opcja:
         parametr = "so"
     else:
@@ -225,7 +224,6 @@ def renderuj_modul_zasolenia():
             style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
         ).add_to(m_zas)
 
-    # Dynamiczna budowa CSS dla legendy na podstawie wybranego parametru
     kolory_str = ", ".join([f"{kolor} {i * 12.5}%" for i, kolor in enumerate(konf['legend_colors'])])
 
     macro_html = f"""
