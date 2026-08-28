@@ -4,7 +4,6 @@ import folium
 from streamlit_folium import st_folium
 import requests
 
-
 def pobierz_surowe_dane(url):
     try:
         headers = {
@@ -20,7 +19,6 @@ def pobierz_surowe_dane(url):
     except Exception as e:
         st.error(f"Błąd połączenia: {e}")
         return None
-
 
 def renderuj_modul_zasolenia():
     st.subheader("Bieżące zasolenie wód - Tylko Zalew Szczeciński")
@@ -38,18 +36,15 @@ def renderuj_modul_zasolenia():
                 try:
                     df = pd.json_normalize(dane_json)
 
-                    kol_lat = next((c for c in df.columns if c.lower() in ['lat', 'latitude', 'gegrlat', 'szerokosc']),
-                                   None)
-                    kol_lon = next(
-                        (c for c in df.columns if c.lower() in ['lon', 'lng', 'longitude', 'gegrlon', 'dlugosc']), None)
+                    kol_lat = next((c for c in df.columns if c.lower() in ['lat', 'latitude', 'gegrlat', 'szerokosc']), None)
+                    kol_lon = next((c for c in df.columns if c.lower() in ['lon', 'lng', 'longitude', 'gegrlon', 'dlugosc']), None)
 
                     if kol_lat and kol_lon:
                         # 1. Konwersja współrzędnych na liczby zmiennoprzecinkowe
                         df[kol_lat] = df[kol_lat].astype(float)
                         df[kol_lon] = df[kol_lon].astype(float)
 
-                        # 2. Bounding Box - współrzędne odcinające resztę kraju
-                        # Obejmuje obszar mniej więcej od Polic do Zatoki Pomorskiej
+                        # 2. Bounding Box - współrzędne odcinające resztę kraju (Zalew Szczeciński)
                         maska_zalew = (
                                 (df[kol_lat] >= 53.50) & (df[kol_lat] <= 53.95) &
                                 (df[kol_lon] >= 14.10) & (df[kol_lon] <= 14.85)
@@ -65,7 +60,6 @@ def renderuj_modul_zasolenia():
                             st.dataframe(df_zalew, use_container_width=True)
 
                             st.write("### Lokalizacje stacji i odczyty")
-                            # Wyśrodkowanie mapy precyzyjnie na Zalew
                             m = folium.Map(location=[53.75, 14.4], zoom_start=10)
 
                             for idx, row in df_zalew.iterrows():
@@ -79,8 +73,7 @@ def renderuj_modul_zasolenia():
 
                             st_folium(m, width=1100, height=550, returned_objects=[])
                         else:
-                            st.warning(
-                                "Brak stacji w wyznaczonym obszarze. Upewnij się, że link zawiera dane dla całego kraju.")
+                            st.warning("Brak stacji w wyznaczonym obszarze. Upewnij się, że link zawiera dane dla całego kraju.")
                     else:
                         st.warning("Skrypt nie znalazł w danych kolumn ze współrzędnymi geograficznymi.")
 
