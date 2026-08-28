@@ -49,7 +49,7 @@ def pobierz_rzeczywiste_zasolenie():
 
             # Ekstrakcja najbliższego mokrego piksela dla warstwy powierzchniowej (depth=0)
             # so = Salinity (zasolenie)
-            wartosc_so = ostatni_czas['so'].sel(lat=lat, lon=lon, method='nearest').isel(depth=0).values
+            wartosc_so = ostatni_czas['so'].sel(latitude=lat, longitude=lon, method='nearest').isel(depth=0).values
 
             wyniki[nazwa] = {
                 "coords": info["coords"],
