@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from branca.element import Template, MacroElement
 
-# Bezpieczna próba importu i inicjalizacji Google Earth Engine
+# Bezpieczna próba importu Google Earth Engine bez wywalania aplikacji
 GEE_DOSTEPNY = False
 try:
     import ee
@@ -26,17 +26,7 @@ try:
         ee.Initialize()
         GEE_DOSTEPNY = True
     except Exception:
-        try:
-            if "gee" in st.secrets:
-                import json
-                from google.oauth2 import service_account
-
-                credentials_info = dict(st.secrets["gee"])
-                credentials = service_account.Credentials.from_service_account_info(credentials_info)
-                ee.Initialize(credentials)
-                GEE_DOSTEPNY = True
-        except Exception:
-            GEE_DOSTEPNY = False
+        GEE_DOSTEPNY = False
 except ImportError:
     GEE_DOSTEPNY = False
 
@@ -106,7 +96,6 @@ def pobierz_rzeczywiste_zasolenie():
 
         return siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski, zalew_gdf, df_do_mapy
     except Exception as e:
-        st.error(f"Błąd pobierania zasolenia z Copernicusa: {e}")
         return None, None, "blad", None, None
 
 
@@ -208,8 +197,8 @@ def renderuj_modul_zasolenia():
 
     else:
         if not GEE_DOSTEPNY:
-            st.error(
-                "⚠️ Google Earth Engine nie jest skonfigurowany lub brak uwierzytelnienia. Moduł wysokościowy wymaga aktywnej sesji GEE.")
+            st.warning(
+                "⚠️ Google Earth Engine nie jest uwierzytelniony w środowisku chmurowym Streamlit Cloud. Aby włączyć model terenu DEM, wymagana jest konfiguracja konta usługowego GEE w sekretach.")
             return
 
         with st.spinner("Odpytywanie Google Earth Engine (Copernicus DEM)..."):
