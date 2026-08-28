@@ -9,3 +9,6 @@ earthengine-api
 requests
 reportlab
 matplotlib
+copernicusmarine
+xarray
+netCDF4
