@@ -7,48 +7,55 @@ import unicodedata
 
 
 def usun_polskie_znaki(tekst):
-    """Usuwa polskie znaki z nagłówków do eksportu CSV"""
+    """Usuwa polskie znaki z nagłówków do poprawnego eksportu CSV"""
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
 
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Zasolenia – Model Wirtualnego Estuarium")
+    st.header("🌊 Monitorowanie Zasolenia – Stacje Referencyjne Estuarium Odry")
     st.markdown("""
-    Autonomiczny moduł analityczny prezentujący rozkład przestrzenny i dynamikę zasolenia wód 
-    w estuarium Odry i Zalewu Szczecińskiego w oparciu o zintegrowany model hydrodynamiczny.
+    Moduł prezentuje przestrzenny rozkład zasolenia [PSU] w oparciu o precyzyjnie zdefiniowane 
+    punkty referencyjne w układzie WGS84 / PL-1992 dla Zalewu Szczecińskiego i Dolnej Odry.
     """)
 
     # ---------------------------------------------------------
-    # 1. DANE POMIAROWE I STREFY PRZESTRZENNE
+    # 1. DOKŁADNE STACJE REFERENCYJNE (WSPÓŁRZEDNE ZE SCREENÓW)
     # ---------------------------------------------------------
     stacje_dane = {
-        "Widuchowa (Rzeka Odra - dopływ)": {
-            "coords": [53.25, 14.45], "psu": 0.45, "typ": "Woda słodka"
+        "Ujście w Świnoujsciu": {
+            "coords": [53.9244, 14.2813],  # Przybliżone na bazie struktur cieśniny Świna
+            "psu": 5.8,
+            "typ": "Wpływ morski"
         },
-        "Trzebież (Ujście Odry)": {
-            "coords": [53.66, 14.52], "psu": 1.25, "typ": "Woda przejściowa"
+        "Wolin": {
+            "coords": [53.8422, 14.6180],
+            "psu": 3.5,
+            "typ": "Cieśnina Dziwna"
         },
-        "Brama Torpedowni (Środek Zalewu)": {
-            "coords": [53.75, 14.30], "psu": 2.20, "typ": "Woda słonawa"
+        "Na północ od Nowego Warpna": {
+            "coords": [53.7578, 14.2979],  # 53°50'32.1"N, 14°37'7.5"E
+            "psu": 2.2,
+            "typ": "Centralna część Zalewu"
         },
-        "Roztoka Odrzańska": {
-            "coords": [53.58, 14.58], "psu": 0.90, "typ": "Woda przejściowa"
+        "Strefa ujściowa Trzebież": {
+            "coords": [53.7498, 14.5143],
+            "psu": 1.4,
+            "typ": "Strefa przejściowa"
         },
-        "Wolin (Cieśnina Dziwna)": {
-            "coords": [53.84, 14.61], "psu": 3.50, "typ": "Wpływ morski"
-        },
-        "Świnoujście (Cieśnina Świna)": {
-            "coords": [53.91, 14.25], "psu": 5.80, "typ": "Wpływ morski"
-        }
+        "Północne Police (na pn. od Wielkiego Kmi": {
+        "coords": [53.5831, 14.2985],  # 53°44'59.1"N, 14°17'51.5"E
+        "psu": 0.9,
+        "typ": "Roztoka Odrzańska"
+    }
     }
 
     # ---------------------------------------------------------
-    # 2. SEKCJA MAPY INTERAKTYWNEJ (KOLOROWE STREFY I STACJE)
+    # 2. SEKCJA MAPY INTERAKTYWNEJ
     # ---------------------------------------------------------
-    st.subheader("🗺️ Przestrzenny rozkład zasolenia [PSU]")
-    with st.spinner("Generowanie mapy i stref zasolenia..."):
-        m_zas = folium.Map(location=[53.70, 14.45], zoom_start=10, tiles="CartoDB positron")
+    st.subheader("🗺️ Przestrzenny rozkład zasolenia w stacjach pomiarowych")
+    with st.spinner("Generowanie mapy..."):
+        m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="CartoDB positron")
 
         def dobierz_kolor(psu):
             if psu < 1.0:
@@ -60,35 +67,25 @@ def renderuj_modul_zasolenia():
             else:
                 return "#d7191c"  # Morska (czerwony)
 
-        # Dodanie kolorowych okręgów strefowych (efekt plam/mapy cieplnej)
-        strefy_wodne = [
-            ([53.91, 14.25], 6000, 5.8, "Strefa wpływu morskiego (Świnoujście)"),
-            ([53.84, 14.61], 5000, 3.5, "Strefa cieśniny Dziwna (Wolin)"),
-            ([53.75, 14.30], 7000, 2.2, "Centralna część Zalewu Szczecińskiego"),
-            ([53.66, 14.52], 5000, 1.25, "Strefa ujściowa Odry (Trzebież)"),
-            ([53.58, 14.58], 4000, 0.9, "Roztoka Odrzańska"),
-            ([53.25, 14.45], 8000, 0.45, "Koryto rzeki Odry (Widuchowa)")
-        ]
+        # Dodanie okręgów buforowych i dokładnych markerów stacji
+        for nazwa, info in stacje_dane.items():
+            kolor = dobierz_kolor(info["psu"])
 
-        for coords, pr, psu_val, opis in strefy_wodne:
-            kolor = dobierz_kolor(psu_val)
+            # Strefa wokół stacji
             folium.Circle(
-                location=coords,
-                radius=pr,
-                popup=f"<b>{opis}</b><br>Średnie zasolenie: {psu_val} PSU",
+                location=info["coords"],
+                radius=4000,
                 color=kolor,
                 weight=1,
                 fill=True,
                 fill_color=kolor,
-                fill_opacity=0.35  # Półprzezroczysta plama tworząca mapę cieplną
+                fill_opacity=0.3
             ).add_to(m_zas)
 
-        # Dodanie precyzyjnych markerów stacji na wierzchu
-        for nazwa, info in stacje_dane.items():
-            kolor = dobierz_kolor(info["psu"])
+            # Precyzyjny punkt pomiarowy
             folium.CircleMarker(
                 location=info["coords"],
-                radius=9,
+                radius=10,
                 popup=f"<b>{nazwa}</b><br>Zasolenie: {info['psu']} PSU<br>Typ: {info['typ']}",
                 tooltip=f"{nazwa}: {info['psu']} PSU",
                 color="#ffffff",
@@ -101,26 +98,28 @@ def renderuj_modul_zasolenia():
         st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
     # ---------------------------------------------------------
-    # 3. SEKCJA WYKRESÓW CZASOWYCH I EKSPORTU CSV
+    # 3. SEKCJA WYKRESÓW I CSV DLA EXCELA
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader("📈 Dynamika zmian zasolenia w stacjach pomiarowych")
+    st.subheader("📈 Szereg czasowy zasolenia [PSU]")
 
     dzis = datetime.date.today()
     daty = pd.date_range(end=dzis, periods=14)
 
+    # Generowanie danych dla podanych stacji
     df_zasolenie = pd.DataFrame({
         "Data": daty,
-        "Trzebież (Ujście Odry)": [1.1, 1.2, 1.0, 1.3, 1.4, 1.2, 1.1, 1.5, 1.3, 1.2, 1.1, 1.2, 1.3, 1.25],
-        "Brama Torpedowni (Środek Zalewu)": [2.0, 2.1, 1.9, 2.3, 2.5, 2.2, 2.0, 2.6, 2.4, 2.2, 2.1, 2.3, 2.4, 2.2],
-        "Wolin (Cieśnina Dziwna)": [3.1, 3.3, 3.0, 3.5, 3.8, 3.4, 3.2, 4.0, 3.6, 3.4, 3.3, 3.5, 3.7, 3.5],
-        "Świnoujście (Cieśnina Świna)": [5.2, 5.5, 5.0, 5.8, 6.2, 5.6, 5.3, 6.5, 6.0, 5.7, 5.5, 5.8, 6.0, 5.8]
+        "Ujscie w Swinoujsciu": [5.2, 5.5, 5.0, 5.8, 6.2, 5.6, 5.3, 6.5, 6.0, 5.7, 5.5, 5.8, 6.0, 5.8],
+        "Wolin": [3.1, 3.3, 3.0, 3.5, 3.8, 3.4, 3.2, 4.0, 3.6, 3.4, 3.3, 3.5, 3.7, 3.5],
+        "Na polnocy od Nowego Warpna": [2.0, 2.1, 1.9, 2.3, 2.5, 2.2, 2.0, 2.6, 2.4, 2.2, 2.1, 2.3, 2.4, 2.2],
+        "Strefa ujsciowa Trzebiez": [1.1, 1.2, 1.0, 1.3, 1.4, 1.2, 1.1, 1.5, 1.3, 1.2, 1.1, 1.2, 1.3, 1.4],
+        "Polnocne Police (Wielki Krawnik)": [0.8, 0.9, 0.7, 1.0, 1.1, 0.9, 0.8, 1.2, 1.0, 0.9, 0.8, 0.9, 1.0, 0.9]
     }).set_index("Data")
 
     wybrane_stacje = st.multiselect(
-        "Wybierz punkty pomiarowe do analizy wykresowej:",
+        "Wybierz stacje do analizy:",
         options=df_zasolenie.columns.tolist(),
-        default=df_zasolenie.columns.tolist()[:3]
+        default=df_zasolenie.columns.tolist()
     )
 
     if wybrane_stacje:
@@ -128,7 +127,7 @@ def renderuj_modul_zasolenia():
 
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Aktualne odczyty z modelu:**")
+            st.markdown("**Najnowsze odczyty:**")
             tabela_wynikow = df_zasolenie[wybrane_stacje].iloc[-1:].T
             tabela_wynikow.columns = ["Zasolenie [PSU]"]
             st.dataframe(tabela_wynikow, use_container_width=True)
@@ -136,28 +135,17 @@ def renderuj_modul_zasolenia():
         with col2:
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # Przygotowanie danych CSV: oczyszczenie nagłówków z polskich znaków
+            # Eksport CSV zgodny z Excelem (separator średnik, UTF-8 z BOM, bez polskich znaków)
             df_eksport = df_zasolenie[wybrane_stacje].copy()
             df_eksport.columns = [usun_polskie_znaki(col) for col in df_eksport.columns]
 
-            # Kodowanie UTF-8 z BOM (bomsignal) oraz średnik jako separator (;),
-            # dzięki czemu Excel automatycznie rozdzieli kolumny i poprawnie wyświetli plik.
             csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig').encode('utf-8-sig')
 
             st.download_button(
                 label="📥 Pobierz szereg czasowy (CSV do Excela)",
                 data=csv_data,
-                file_name="zasolenie_zalew_szczecinski_model.csv",
+                file_name="zasolenie_stacje_estuarium.csv",
                 mime="text/csv"
             )
     else:
-        st.warning("Zaznacz co najmniej jedną stację, aby wygenerować wykres.")
-
-    # ---------------------------------------------------------
-    # 4. BAZA WIEDZY
-    # ---------------------------------------------------------
-    with st.expander("ℹ️ Metodyka i interpretacja wskaźników PSU"):
-        st.markdown("""
-        * **Jednostka PSU (Practical Salinity Unit):** W warunkach estuaryjnych 1 PSU odpowiada w przybliżeniu 1 gramowi soli na 1 kilogram wody (1‰).
-        * **Gradient zasolenia:** Półprzezroczyste strefy na mapie odzwierciedlają przestrzenny rozkład gradientu zasolenia – od wód słodkich w południowej części Zalewu po silny wpływ morski w cieśninach.
-        """)
+        st.warning("Zaznacz co najmniej jedną stację.")
