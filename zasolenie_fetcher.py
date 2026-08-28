@@ -8,7 +8,7 @@ import unicodedata
 import xarray as xr
 import copernicusmarine
 import geopandas as gpd
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
@@ -16,22 +16,33 @@ from matplotlib.path import Path
 import io
 import base64
 from branca.element import Template, MacroElement
+import ee
 
-# Słownik konfiguracyjny dla różnych parametrów hydrofizycznych
+# Inicjalizacja Google Earth Engine (jeśli jeszcze nie zainicjalizowano)
+try:
+    ee.Initialize()
+except Exception:
+    try:
+        ee.Authenticate(auth_mode='notebook')
+        ee.Initialize()
+    except Exception:
+        pass
+
+# Słownik konfiguracyjny dla parametrów
 KONFIGURACJA_PARAMETROW = {
     "so": {
-        "nazwa": "Zasolenie",
+        "nazwa": "Zasolenie wody",
         "jednostka": "PSU",
         "cmap": "jet",
         "legend_colors": ['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                           '#7f0000']
     },
-    "zos": {
-        "nazwa": "Poziom lustra wody",
-        "jednostka": "m",
-        "cmap": "coolwarm",
-        "legend_colors": ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
-                          '#d73027']
+    "dem": {
+        "nazwa": "Wysokość terenu i wody (Copernicus DEM)",
+        "jednostka": "m n.p.m.",
+        "cmap": "terrain",
+        "legend_colors": ['#006400', '#228B22', '#8FBC8F', '#DEB887', '#D2B48C', '#BC8F8F', '#A0522D', '#8B4513',
+                          '#FFFFFF']
     }
 }
 
@@ -42,7 +53,7 @@ def usun_polskie_znaki(tekst):
 
 
 @st.cache_data(ttl=86400)
-def pobierz_rzeczywiste_dane(zmienna="so"):
+def pobierz_rzeczywiste_zasolenie():
     siatka_gradientu = []
     status_maski = "brak"
     zalew_gdf = None
@@ -58,20 +69,12 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
         )
         ostatni_czas = ds.isel(time=-1)
 
-        # Pobieranie BBOX z uwzględnieniem braku wymiaru głębokości dla poziomu wody (zos)
-        if zmienna == "so":
-            bbox_ds = ostatni_czas[zmienna].sel(
-                latitude=slice(53.40, 54.00),
-                longitude=slice(14.15, 14.80)
-            ).isel(depth=0)
-        else:
-            # zos to zmienna 2D (tylko czas, szerokość, długość) - bez głębokości
-            bbox_ds = ostatni_czas[zmienna].sel(
-                latitude=slice(53.40, 54.00),
-                longitude=slice(14.15, 14.80)
-            )
+        bbox_ds = ostatni_czas['so'].sel(
+            latitude=slice(53.40, 54.00),
+            longitude=slice(14.15, 14.80)
+        ).isel(depth=0)
 
-        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
+        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -86,17 +89,17 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
 
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
-                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[zmienna]
+                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row['so']
             })
 
         return siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski, zalew_gdf, df_do_mapy
     except Exception as e:
-        st.error(f"Błąd przetwarzania zmiennej {zmienna}: {e}")
+        st.error(f"Błąd pobierania zasolenia z Copernicusa: {e}")
         return None, None, "blad", None, None
 
 
 @st.cache_data(ttl=86400)
-def pobierz_szereg_czasowy_30_dni(zmienna="so"):
+def pobierz_szereg_czasowy_zasolenia_30_dni():
     try:
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
@@ -104,16 +107,9 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
             dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
             username=user, password=pwd
         )
-
         ostatnie_30 = ds.isel(time=slice(-30, None))
-
-        if zmienna == "so":
-            bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(
-                depth=0)
-        else:
-            bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
-
-        df = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
+        bbox_ds = ostatnie_30['so'].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(depth=0)
+        df = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -123,52 +119,105 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
             clipped = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
             df = clipped
 
-        szereg = df.groupby('time')[zmienna].mean().reset_index()
-        jednostka = KONFIGURACJA_PARAMETROW[zmienna]["jednostka"]
-        nazwa = KONFIGURACJA_PARAMETROW[zmienna]["nazwa"]
-        szereg.rename(columns={'time': 'Data', zmienna: f'Średni {nazwa} ({jednostka})'}, inplace=True)
+        szereg = df.groupby('time')['so'].mean().reset_index()
+        szereg.rename(columns={'time': 'Data', 'so': 'Średnie Zasolenie (PSU)'}, inplace=True)
         szereg['Data'] = szereg['Data'].dt.date
         return szereg
     except Exception:
         return None
 
 
+def pobierz_dane_gee_dem():
+    """Pobiera model wysokościowy terenu z Google Earth Engine dla obszaru Zalewu"""
+    maska_path = "zalew_maska.geojson"
+    if not os.path.exists(maska_path):
+        return None, "brak"
+
+    zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
+    minx, miny, maxx, maxy = zalew_gdf.total_bounds
+
+    # Definiowanie geometrycznego obszaru zainteresowania w GEE
+    roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
+
+    # Użycie Copernicus DEM GLO-30 (wysoka rozdzielczość 30m)
+    dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(roi)
+
+    # Pobieramy próbkę punktów (siatkę) z GEE do lokalnego DataFrame
+    # Skala 1000m zapewnia optymalną gęstość punktów do płynnej interpolacji wtyczki
+    try:
+        punkty_ee = dem.sample(
+            region=roi,
+            scale=800,
+            numPixels=3000,
+            geometries=True
+        )
+        dane_geojson = punkty_ee.getInfo()
+
+        siatka_gradientu = []
+        rows = []
+        for feature in dane_geojson['features']:
+            coords = feature['geometry']['coordinates']
+            val = feature['properties']['DEM']
+            if val is not None:
+                lon, lat = coords[0], coords[1]
+                siatka_gradientu.append({"lat": lat, "lon": lon, "wartosc": val})
+                rows.append({"latitude": lat, "longitude": lon, "dem": val})
+
+        df_piksle = pd.DataFrame(rows)
+        return siatka_gradientu, "zaladowana", zalew_gdf, df_piksle
+    except Exception as e:
+        st.error(f"Błąd pobierania danych wysokościowych z Google Earth Engine: {e}")
+        return None, "blad", zalew_gdf, None
+
+
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Hydrofizyczne (CMEMS)")
+    st.header("🌊 Monitorowanie Hydrofizyczne i Terenowe")
 
     wybrany_parametr_opcja = st.radio(
         "Wybierz parametr przestrzenny do analizy:",
-        options=["Zasolenie wody", "Poziom lustra wody (przejezdność terenu)"],
+        options=["Zasolenie wody (Model CMEMS)", "Wysokość terenu i przejezdność (Google Earth Engine)"],
         horizontal=True
     )
 
     if "Zasolenie" in wybrany_parametr_opcja:
         parametr = "so"
     else:
-        parametr = "zos"
+        parametr = "dem"
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
-    with st.spinner(f"Przetwarzanie zapytań NetCDF dla parametru: {konf['nazwa']}..."):
-        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_dane(parametr)
+    if parametr == "so":
+        with st.spinner("Pobieranie macierzy NetCDF zasolenia..."):
+            siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_zasolenie()
 
-    if not siatka_gradientu:
-        st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP.")
-        return
+        if not siatka_gradientu:
+            st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP dla Copernicusa.")
+            return
 
-    vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
-    val_min = float(vals_array.min())
-    val_max = float(vals_array.max())
-    val_mean = float(vals_array.mean())
+        vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
+        val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
+        st.success(f"✅ Poligon wczytany. Zaktualizowano model CMEMS na dzień: {data_modelu}")
 
-    st.success(f"✅ Poligon wczytany. Zaktualizowano na dzień: {data_modelu}")
+    else:
+        with st.spinner("Odpytywanie Google Earth Engine (Copernicus DEM)..."):
+            siatka_gradientu, status_maski, zalew_gdf, df_piksle = pobierz_dane_gee_dem()
+            data_modelu = datetime.date.today().isoformat()
 
+        if not siatka_gradientu:
+            st.warning("Nie udało się pobrać danych wysokościowych z Google Earth Engine.")
+            return
+
+        vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
+        val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
+        st.success(f"✅ Pobieranie z GEE zakończone pomyślnie. Model terenu (Copernicus DEM).")
+
+    # Karty KPI
     c1, c2, c3 = st.columns(3)
-    c1.metric(f"Minimalny {konf['nazwa'].lower()}", f"{val_min:.5f} {konf['jednostka']}")
-    c2.metric(f"Średni {konf['nazwa'].lower()}", f"{val_mean:.5f} {konf['jednostka']}")
-    c3.metric(f"Maksymalny {konf['nazwa'].lower()}", f"{val_max:.5f} {konf['jednostka']}")
+    c1.metric(f"Minimalny ({konf['jednostka']})", f"{val_min:.2f} {konf['jednostka']}")
+    c2.metric(f"Średni ({konf['jednostka']})", f"{val_mean:.2f} {konf['jednostka']}")
+    c3.metric(f"Maksymalny ({konf['jednostka']})", f"{val_max:.2f} {konf['jednostka']}")
 
-    st.subheader("🗺️ Analityczna mapa gradientowa (Interpolacja Cubic)")
+    st.subheader(f"🗺️ Mapa analityczna: {konf['nazwa']}")
     m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="OpenStreetMap")
 
     if siatka_gradientu:
@@ -221,6 +270,7 @@ def renderuj_modul_zasolenia():
         ).add_to(m_zas)
 
         if df_piksle is not None:
+            val_col = 'so' if parametr == 'so' else 'dem'
             for idx, row in df_piksle.iterrows():
                 folium.CircleMarker(
                     location=[row['latitude'], row['longitude']],
@@ -229,7 +279,7 @@ def renderuj_modul_zasolenia():
                     fill=True,
                     fill_color='transparent',
                     fill_opacity=0,
-                    tooltip=f"Węzeł modelu:<br><b>{row[parametr]:.6f} {konf['jednostka']}</b>"
+                    tooltip=f"Wartość w węźle:<br><b>{row[val_col]:.2f} {konf['jednostka']}</b>"
                 ).add_to(m_zas)
 
     if status_maski == "zaladowana":
@@ -268,11 +318,11 @@ def renderuj_modul_zasolenia():
                 ">
             </div>
             <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
-                <span>{val_max:.4f}</span>
-                <span>{val_min + (val_max - val_min) * 0.75:.4f}</span>
-                <span>{val_min + (val_max - val_min) * 0.5:.4f}</span>
-                <span>{val_min + (val_max - val_min) * 0.25:.4f}</span>
-                <span>{val_min:.4f}</span>
+                <span>{val_max:.2f}</span>
+                <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
+                <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
+                <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
+                <span>{val_min:.2f}</span>
             </div>
         </div>
     </div>
@@ -285,30 +335,34 @@ def renderuj_modul_zasolenia():
     st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
     # ---------------------------------------------------------
-    # 2. SEKCJA ANALIZY CZASOWEJ
+    # 2. SEKCJA ANALIZY CZASOWEJ (Tylko dla zasolenia)
     # ---------------------------------------------------------
-    st.markdown("---")
-    st.subheader(f"📈 Dynamika zmian - {konf['nazwa']} (Ostatnie 30 dni)")
-
-    with st.spinner("Pobieranie i agregacja danych z ostatniego miesiąca..."):
-        szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
-
-    if szereg_df is not None:
-        st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#d73027")
+    if parametr == "so":
+        st.markdown("---")
+        st.subheader("📈 Dynamika zmian - Zasolenie wody (Ostatnie 30 dni)")
+        with st.spinner("Pobieranie danych historycznych z CMEMS..."):
+            szereg_df = pobierz_szereg_czasowy_zasolenia_30_dni()
+        if szereg_df is not None:
+            st.line_chart(szereg_df.set_index('Data'), color="#007fff")
+        else:
+            st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
     else:
-        st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
+        st.markdown("---")
+        st.info(
+            "💡 **Wskazówka terenowa:** Model wysokościowy Copernicus DEM pozwala ocenić ukształtowanie terenu wokół brzegów. Wartości bliskie 0 m n.p.m. oznaczają podmokłe, nisko położone odcinki brzegowe, na których w przypadku spiętrzeń sztormowych lub wysokiego stanu wód może wystąpić utrudniona przejezdność.")
 
     # ---------------------------------------------------------
-    # 3. SEKCJA RAPORTU Z WEZŁÓW SIATKI
+    # 3. SEKCJA RAPORTU I EKSPORTU CSV
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader(f"📊 Raport danych przestrzennych - {konf['nazwa']} (Eksport Excel)")
+    st.subheader(f"📊 Tabela danych przestrzennych - {konf['nazwa']} (Eksport Excel)")
 
-    df_eksport = df_piksle[['latitude', 'longitude', parametr]].copy()
+    val_col = 'so' if parametr == 'so' else 'dem'
+    df_eksport = df_piksle[['latitude', 'longitude', val_col]].copy()
     df_eksport.rename(columns={
         'latitude': 'Szerokosc Geograficzna',
         'longitude': 'Dlugosc Geograficzna',
-        parametr: f"{usun_polskie_znaki(konf['nazwa'])} ({konf['jednostka']})"
+        val_col: f"{usun_polskie_znaki(konf['nazwa'])} ({konf['jednostka']})"
     }, inplace=True)
     df_eksport.reset_index(drop=True, inplace=True)
 
@@ -321,7 +375,7 @@ def renderuj_modul_zasolenia():
         csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
 
         st.download_button(
-            label="📥 Pobierz węzły siatki (CSV)",
+            label="📥 Pobierz siatkę do Excela (CSV)",
             data=csv_data,
             file_name=f"{parametr}_siatka_{data_modelu}.csv",
             mime="text/csv"
