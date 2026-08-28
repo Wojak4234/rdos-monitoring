@@ -16,17 +16,30 @@ from matplotlib.path import Path
 import io
 import base64
 from branca.element import Template, MacroElement
-import ee
 
-# Inicjalizacja Google Earth Engine (jeśli jeszcze nie zainicjalizowano)
+# Bezpieczna próba importu i inicjalizacji Google Earth Engine
+GEE_DOSTEPNY = False
 try:
-    ee.Initialize()
-except Exception:
+    import ee
+
     try:
-        ee.Authenticate(auth_mode='notebook')
         ee.Initialize()
+        GEE_DOSTEPNY = True
     except Exception:
-        pass
+        try:
+            # Próba inicjalizacji z wykorzystaniem sekretów Streamlita (jeśli skonfigurowano)
+            if "gee" in st.secrets:
+                import json
+                from google.oauth2 import service_account
+
+                credentials_info = dict(st.secrets["gee"])
+                credentials = service_account.Credentials.from_service_account_info(credentials_info)
+                ee.Initialize(credentials)
+                GEE_DOSTEPNY = True
+        except Exception:
+            GEE_DOSTEPNY = False
+except ImportError:
+    GEE_DOSTEPNY = False
 
 # Słownik konfiguracyjny dla parametrów
 KONFIGURACJA_PARAMETROW = {
@@ -135,10 +148,15 @@ def pobierz_dane_gee_dem():
     zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
     minx, miny, maxx, maxy = zalew_gdf.total_bounds
 
-    roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
-    dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(roi)
+    if not GEE_DOSTEPNY:
+        st.warning(
+            "⚠️ Google Earth Engine nie jest zainicjalizowany. Wymagane jest skonfigurowanie dostępu do GEE w sekretech Streamlit Cloud.")
+        return None, "brak", zalew_gdf, None
 
     try:
+        roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
+        dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(roi)
+
         punkty_ee = dem.sample(
             region=roi,
             scale=800,
@@ -160,7 +178,7 @@ def pobierz_dane_gee_dem():
         df_piksle = pd.DataFrame(rows)
         return siatka_gradientu, "zaladowana", zalew_gdf, df_piksle
     except Exception as e:
-        st.error(f"Błąd pobierania danych wysokościowych z Google Earth Engine: {e}")
+        st.error(f"Błąd przetwarzania GEE: {e}")
         return None, "blad", zalew_gdf, None
 
 
