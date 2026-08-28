@@ -58,10 +58,18 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
         )
         ostatni_czas = ds.isel(time=-1)
 
-        bbox_ds = ostatni_czas[zmienna].sel(
-            latitude=slice(53.40, 54.00),
-            longitude=slice(14.15, 14.80)
-        ).isel(depth=0)
+        # Pobieranie BBOX z uwzględnieniem braku wymiaru głębokości dla poziomu wody (zos)
+        if zmienna == "so":
+            bbox_ds = ostatni_czas[zmienna].sel(
+                latitude=slice(53.40, 54.00),
+                longitude=slice(14.15, 14.80)
+            ).isel(depth=0)
+        else:
+            # zos to zmienna 2D (tylko czas, szerokość, długość) - bez głębokości
+            bbox_ds = ostatni_czas[zmienna].sel(
+                latitude=slice(53.40, 54.00),
+                longitude=slice(14.15, 14.80)
+            )
 
         df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
 
@@ -83,6 +91,7 @@ def pobierz_rzeczywiste_dane(zmienna="so"):
 
         return siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski, zalew_gdf, df_do_mapy
     except Exception as e:
+        st.error(f"Błąd przetwarzania zmiennej {zmienna}: {e}")
         return None, None, "blad", None, None
 
 
@@ -97,7 +106,13 @@ def pobierz_szereg_czasowy_30_dni(zmienna="so"):
         )
 
         ostatnie_30 = ds.isel(time=slice(-30, None))
-        bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(depth=0)
+
+        if zmienna == "so":
+            bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80)).isel(
+                depth=0)
+        else:
+            bbox_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+
         df = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna])
 
         maska_path = "zalew_maska.geojson"
