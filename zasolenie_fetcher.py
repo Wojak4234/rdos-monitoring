@@ -277,6 +277,7 @@ def renderuj_modul_zasolenia():
         st.markdown("<br>", unsafe_allow_html=True)
         csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
 
+
         st.download_button(
             label="📥 Pobierz węzły siatki (CSV)",
             data=csv_data,
