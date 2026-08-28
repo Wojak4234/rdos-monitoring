@@ -1,5 +1,3 @@
-# zasolenie_fetcher.py
-
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
@@ -23,14 +21,35 @@ def renderuj_modul_zasolenia():
     with st.spinner("Ładowanie podkładu WMS i danych przestrzennych..."):
         m_zas = folium.Map(location=[53.75, 14.35], zoom_start=10)
 
-        # Warstwa WMS z SatBałtyku
+        # --- DYNAMICZNY GENERATOR ŚCIEŻKI SATBAŁTYK ---
+        dzis = datetime.date.today()
+        wczoraj = dzis - datetime.timedelta(days=1)
+
+        path_dzis = dzis.strftime('%Y/%m/%d')
+        str_dzis = dzis.strftime('%Y%m%d')
+        str_wczoraj = wczoraj.strftime('%Y%m%d')
+
+        dynamiczny_plik = f"m_ug_pm3d_1_05nm_um_assim_sst_v0-sb1k_m/data-d/{path_dzis}/{str_dzis}_060000-m_ug_pm3d_1_05nm_um_assim_sst_v0-sb1k_m-ws-0-{str_wczoraj}_000000-v2.i32f.gz"
+
+        # --- GŁÓWNA WARSTWA WMS ---
+        # W Folium możemy podać dowolne, dodatkowe parametry (jak colormap czy file_path),
+        # a biblioteka automatycznie doklei je do zapytania sieciowego wysyłanego do serwera WMS.
         folium.raster_layers.WmsTileLayer(
-            url="https://serwer-wms.satbaltyk.pl/geoserver/wms",
-            layers="satbaltyk:salinity_surface",
+            url="https://satbaltyk.iopan.pl/satbaltyk-geoserver/satbaltyk/wms",
+            layers="satbaltyk_snapshot_raster",
             fmt="image/png",
             transparent=True,
             name="Zasolenie powierzchniowe [PSU]",
-            attr="Dane: System SatBałtyk (IO PAN)"
+            attr="Dane: System SatBałtyk (IO PAN)",
+            # Niestandardowe parametry wyciągnięte z API SatBałtyku
+            parameter_id="ws",
+            dataset="m_ug_pm3d_1_05nm_um_assim_sst_v0",
+            file_path=dynamiczny_plik,
+            colormap_type="smooth",
+            colormap_min_value="0",
+            colormap_max_value="32",
+            colormap_min_color="RGBA:7609fbff",
+            colormap_max_color="RGBA:840101ff"
         ).add_to(m_zas)
 
         # Dodanie znaczników wirtualnych stacji referencyjnych na Zalewie
@@ -58,7 +77,6 @@ def renderuj_modul_zasolenia():
     st.markdown("---")
     st.subheader("📈 Dynamika zmian zasolenia [PSU]")
 
-    # Symulacja danych na potrzeby interfejsu
     dzis = datetime.date.today()
     daty = pd.date_range(end=dzis, periods=14)
 
@@ -108,7 +126,6 @@ def renderuj_modul_zasolenia():
     with st.expander("ℹ️ Co to jest PSU i jak interpretować te wyniki?"):
         st.markdown("""
         * **PSU (Practical Salinity Unit)** – Praktyczna Jednostka Zasolenia. W oceanografii przyjmuje się, że **1 PSU ≈ 1‰ (promil)**, co oznacza 1 gram soli rozpuszczony w 1 kilogramie wody.
-        * **Specyfika estuarium Odry:** Zalew Szczeciński jest środowiskiem przejściowym, w którym mieszają się wody słodkie z rzeki Odry (ok. 0.5 PSU) z wodami słonawymi z Morza Bałtyckiego (ok. 7 PSU w Zatoce Pomorskiej).
-        * **Zjawisko cofki (Wlewy morskie):** Gwałtowne wzrosty zasolenia (piki na wykresach) występują najczęściej przy silnych, sztormowych wiatrach z kierunków północnych. Woda morska jest wtedy wpychana przez cieśniny (Świna, Dziwna) w głąb Zalewu.
+        * **Specyfika estuarium Odry:** W Zalewie Szczecińskim mieszają się wody słodkie z rzeki Odry (ok. 0.5 PSU) z wodami słonawymi z Morza Bałtyckiego (ok. 7 PSU w Zatoce Pomorskiej).
         * **Teledekcja zasolenia:** Satelity nie mierzą bezpośrednio soli. Algorytmy SatBałtyk analizują właściwości optyczne wody, takie jak CDOM (żółta substancja rozpuszczona), która jest silnie skorelowana ze słodkimi wodami rzecznymi. 
         """)
