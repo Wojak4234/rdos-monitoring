@@ -13,3 +13,5 @@ copernicusmarine
 xarray
 netCDF4
 geopandas
+numpy
+scipy
