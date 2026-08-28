@@ -12,3 +12,4 @@ matplotlib
 copernicusmarine
 xarray
 netCDF4
+geopandas
