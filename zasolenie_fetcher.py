@@ -9,9 +9,15 @@ import xarray as xr
 import copernicusmarine
 import geopandas as gpd
 from shapely.geometry import Point
+import numpy as np
+from scipy.interpolate import griddata
+import matplotlib.pyplot as plt
+import io
+import base64
 
 
 def usun_polskie_znaki(tekst):
+    """Usuwa polskie znaki z nagłówków do poprawnego eksportu CSV"""
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
@@ -34,6 +40,7 @@ def pobierz_rzeczywiste_zasolenie():
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
 
+        # Otwarcie zbioru danych OPeNDAP
         ds = copernicusmarine.open_dataset(
             dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
             username=user,
@@ -42,18 +49,19 @@ def pobierz_rzeczywiste_zasolenie():
 
         ostatni_czas = ds.isel(time=-1)
 
-        # 1. Odczyty dla stacji referencyjnych
+        # 1. POBIERANIE PUNKTOWE (Dla stacji referencyjnych)
         for nazwa, info in stacje_definicje.items():
             lat = info["coords"][0]
             lon = info["coords"][1]
             wartosc_so = ostatni_czas['so'].sel(latitude=lat, longitude=lon, method='nearest').isel(depth=0).values
+
             wyniki[nazwa] = {
                 "coords": info["coords"],
                 "typ": info["typ"],
                 "psu": round(float(wartosc_so), 2)
             }
 
-        # 2. Pobieranie BBOX i maskowanie przestrzenne
+        # 2. POBIERANIE SIATKI RASTROWEJ
         bbox_ds = ostatni_czas['so'].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
@@ -61,16 +69,16 @@ def pobierz_rzeczywiste_zasolenie():
 
         df_grid = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
+        # Maskowanie za pomocą pliku GeoJSON
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
             status_maski = "zaladowana"
-            # Zapewnienie jednorodności układów współrzędnych
             zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
 
             geometria = [Point(xy) for xy in zip(df_grid['longitude'], df_grid['latitude'])]
             grid_gdf = gpd.GeoDataFrame(df_grid, geometry=geometria, crs="EPSG:4326")
 
-            # Przecięcie z wykorzystaniem 'intersects', by uwzględnić piksele przybrzeżne
+            # Zostawiamy punkty stykające się z estuarium
             clipped_grid = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
             df_do_mapy = clipped_grid
         else:
@@ -86,29 +94,78 @@ def pobierz_rzeczywiste_zasolenie():
         return wyniki, siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski
 
     except Exception as e:
-        st.error(f"⚠️ Błąd strukturalny: {e}")
+        st.error(f"⚠️ Błąd połączenia z API lub przetwarzania danych: {e}")
         return None, None, None, "blad"
 
 
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Zasolenia (CMEMS)")
+    st.header("🌊 Monitorowanie Zasolenia (Dane Rzeczywiste CMEMS)")
 
-    with st.spinner("Przetwarzanie zapytań przestrzennych NetCDF..."):
+    with st.spinner("Pobieranie macierzy NetCDF i maskowanie przestrzenne..."):
         dane_rzeczywiste, siatka_gradientu, data_modelu, status_maski = pobierz_rzeczywiste_zasolenie()
 
     if not dane_rzeczywiste:
         st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP.")
         return
 
-    if status_maski == "brak":
-        st.warning(
-            "Brak pliku 'zalew_maska.geojson' w głównym folderze aplikacji. System wyrenderował pełny zasięg BBOX.")
-    else:
-        st.success(f"✅ Poligon Zalewu Szczecińskiego wczytany poprawnie. Data modelu: {data_modelu}")
+    st.success(f"✅ Przeprowadzono analizę przestrzenną modelu z dnia: {data_modelu}")
 
+    # ---------------------------------------------------------
+    # 1. SEKCJA MAPY INTERAKTYWNEJ
+    # ---------------------------------------------------------
     st.subheader("🗺️ Analityczna mapa gradientowa")
-    m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="CartoDB positron")
 
+    # Zmiana mapy bazowej na darmową, bez znaków wodnych (jak w GEE)
+    m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="OpenStreetMap")
+
+    # --- SEKCJA GENEROWANIA GŁADKIEGO RASTRA ---
+    if siatka_gradientu:
+        lats = np.array([p["lat"] for p in siatka_gradientu])
+        lons = np.array([p["lon"] for p in siatka_gradientu])
+        vals = np.array([p["psu"] for p in siatka_gradientu])
+
+        # Zagęszczenie siatki dla płynnego gradientu
+        grid_lon, grid_lat = np.meshgrid(
+            np.linspace(lons.min() - 0.01, lons.max() + 0.01, 400),
+            np.linspace(lats.min() - 0.01, lats.max() + 0.01, 400)
+        )
+
+        # Interpolacja sześcienna (cubic)
+        grid_vals = griddata((lons, lats), vals, (grid_lon, grid_lat), method='cubic')
+
+        # Wygenerowanie obrazu za pomocą Matplotlib
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.axis('off')
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+        # Rysowanie mapy cieplnej (cmap='jet' dla efektu od niebieskiego po czerwony)
+        contour = ax.contourf(grid_lon, grid_lat, grid_vals, levels=30, cmap='jet', alpha=0.65)
+
+        # Zapis do przezroczystego PNG w pamięci podręcznej
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0)
+        img_buf.seek(0)
+        img_base64 = base64.b64encode(img_buf.read()).decode('utf-8')
+        plt.close(fig)
+
+        # Nałożenie obrazu na mapę Folium
+        img_bounds = [[lats.min() - 0.01, lons.min() - 0.01], [lats.max() + 0.01, lons.max() + 0.01]]
+        folium.raster_layers.ImageOverlay(
+            image=f"data:image/png;base64,{img_base64}",
+            bounds=img_bounds,
+            opacity=0.7,
+            name="Gradient zasolenia"
+        ).add_to(m_zas)
+
+    # Obrysowanie konturów Zalewu za pomocą Twojego GeoJSON
+    if status_maski == "zaladowana":
+        folium.GeoJson(
+            "zalew_maska.geojson",
+            name="Linia brzegowa",
+            style_function=lambda x: {'color': '#333333', 'weight': 1.5, 'fillOpacity': 0}
+        ).add_to(m_zas)
+
+    # Markery stacji referencyjnych (na wierzchu)
     def dobierz_kolor(psu):
         if psu < 1.0:
             return "#2b83ba"
@@ -118,31 +175,6 @@ def renderuj_modul_zasolenia():
             return "#fdae61"
         else:
             return "#d7191c"
-
-    # Nałożenie granic fizycznego poligonu na mapę w celu kontroli przestrzennej
-    if status_maski == "zaladowana":
-        folium.GeoJson(
-            "zalew_maska.geojson",
-            name="Maska Cięcia",
-            style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
-        ).add_to(m_zas)
-
-    rozdzielczosc = 0.008
-
-    for piksel in siatka_gradientu:
-        lat = piksel["lat"]
-        lon = piksel["lon"]
-        psu = piksel["psu"]
-        kolor = dobierz_kolor(psu)
-
-        folium.Rectangle(
-            bounds=[[lat - rozdzielczosc, lon - rozdzielczosc], [lat + rozdzielczosc, lon + rozdzielczosc]],
-            color=kolor,
-            weight=0,
-            fill=True,
-            fill_color=kolor,
-            fill_opacity=0.65  # Podniesiona nieprzezroczystość dla zatarcia granic między pikselami
-        ).add_to(m_zas)
 
     for nazwa, info in dane_rzeczywiste.items():
         kolor = dobierz_kolor(info["psu"])
@@ -155,6 +187,13 @@ def renderuj_modul_zasolenia():
 
     st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
+    st.markdown(
+        "<p style='text-align: center; color: gray; font-size: 12px;'>Wykonano na potrzeby RDOŚ Monitoring | Wykonał: Wojciech Świątek</p>",
+        unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # 2. SEKCJA WYNIKÓW I EKSPORTU CSV
+    # ---------------------------------------------------------
     st.markdown("---")
     st.subheader("📊 Agregacja wyników punktowych (PSU)")
 
