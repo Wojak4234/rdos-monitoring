@@ -5,6 +5,8 @@ import pandas as pd
 import datetime
 import os
 import unicodedata
+import io
+import base64
 import xarray as xr
 import copernicusmarine
 import geopandas as gpd
@@ -13,8 +15,6 @@ import numpy as np
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
-import io
-import base64
 from branca.element import Template, MacroElement
 
 # Bezpieczna próba importu i inicjalizacji Google Earth Engine
@@ -27,7 +27,6 @@ try:
         GEE_DOSTEPNY = True
     except Exception:
         try:
-            # Próba inicjalizacji z wykorzystaniem sekretów Streamlita (jeśli skonfigurowano)
             if "gee" in st.secrets:
                 import json
                 from google.oauth2 import service_account
@@ -149,8 +148,6 @@ def pobierz_dane_gee_dem():
     minx, miny, maxx, maxy = zalew_gdf.total_bounds
 
     if not GEE_DOSTEPNY:
-        st.warning(
-            "⚠️ Google Earth Engine nie jest zainicjalizowany. Wymagane jest skonfigurowanie dostępu do GEE w sekretech Streamlit Cloud.")
         return None, "brak", zalew_gdf, None
 
     try:
@@ -178,7 +175,6 @@ def pobierz_dane_gee_dem():
         df_piksle = pd.DataFrame(rows)
         return siatka_gradientu, "zaladowana", zalew_gdf, df_piksle
     except Exception as e:
-        st.error(f"Błąd przetwarzania GEE: {e}")
         return None, "blad", zalew_gdf, None
 
 
@@ -211,6 +207,11 @@ def renderuj_modul_zasolenia():
         st.success(f"✅ Poligon wczytany. Zaktualizowano model CMEMS na dzień: {data_modelu}")
 
     else:
+        if not GEE_DOSTEPNY:
+            st.error(
+                "⚠️ Google Earth Engine nie jest skonfigurowany lub brak uwierzytelnienia. Moduł wysokościowy wymaga aktywnej sesji GEE.")
+            return
+
         with st.spinner("Odpytywanie Google Earth Engine (Copernicus DEM)..."):
             siatka_gradientu, status_maski, zalew_gdf, df_piksle = pobierz_dane_gee_dem()
             data_modelu = datetime.date.today().isoformat()
