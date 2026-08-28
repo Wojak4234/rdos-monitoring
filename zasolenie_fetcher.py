@@ -18,6 +18,7 @@ import base64
 import branca.colormap as cm
 
 
+
 def usun_polskie_znaki(tekst):
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
