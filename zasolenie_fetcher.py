@@ -12,14 +12,12 @@ from shapely.geometry import Point
 
 
 def usun_polskie_znaki(tekst):
-    """Usuwa polskie znaki z nagłówków i wartości do poprawnego eksportu CSV"""
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
 
 @st.cache_data(ttl=86400)
 def pobierz_rzeczywiste_zasolenie():
-    """Pobiera i maskuje zasolenie z modelu CMEMS"""
     stacje_definicje = {
         "Ujście w Świnoujściu": {"coords": [53.9244, 14.2813], "typ": "Wpływ morski"},
         "Wolin": {"coords": [53.8422, 14.6180], "typ": "Cieśnina Dziwna"},
@@ -30,12 +28,12 @@ def pobierz_rzeczywiste_zasolenie():
 
     wyniki = {}
     siatka_gradientu = []
+    status_maski = "brak"
 
     try:
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
 
-        # Otwarcie zbioru danych OPeNDAP
         ds = copernicusmarine.open_dataset(
             dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
             username=user,
@@ -44,44 +42,40 @@ def pobierz_rzeczywiste_zasolenie():
 
         ostatni_czas = ds.isel(time=-1)
 
-        # 1. POBIERANIE DANYCH PUNKTOWYCH
+        # 1. Odczyty dla stacji referencyjnych
         for nazwa, info in stacje_definicje.items():
             lat = info["coords"][0]
             lon = info["coords"][1]
             wartosc_so = ostatni_czas['so'].sel(latitude=lat, longitude=lon, method='nearest').isel(depth=0).values
-
             wyniki[nazwa] = {
                 "coords": info["coords"],
                 "typ": info["typ"],
                 "psu": round(float(wartosc_so), 2)
             }
 
-        # 2. POBIERANIE I MASKOWANIE SIATKI RASTROWEJ
-        # Zgrubny BBOX na cały obszar estuarium
+        # 2. Pobieranie BBOX i maskowanie przestrzenne
         bbox_ds = ostatni_czas['so'].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
         ).isel(depth=0)
 
-        df_grid = bbox_ds.to_dataframe().reset_index()
-        df_grid = df_grid.dropna(subset=['so'])
+        df_grid = bbox_ds.to_dataframe().reset_index().dropna(subset=['so'])
 
-        # Maskowanie za pomocą pliku GeoJSON
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
-            zalew_gdf = gpd.read_file(maska_path)
-            # Przygotowanie geometrii punktowej ze środków pikseli modelu
+            status_maski = "zaladowana"
+            # Zapewnienie jednorodności układów współrzędnych
+            zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
+
             geometria = [Point(xy) for xy in zip(df_grid['longitude'], df_grid['latitude'])]
             grid_gdf = gpd.GeoDataFrame(df_grid, geometry=geometria, crs="EPSG:4326")
 
-            # Przecięcie przestrzenne (zostawiamy tylko punkty wpadające w poligon Zalewu)
-            clipped_grid = gpd.sjoin(grid_gdf, zalew_gdf, predicate="within")
+            # Przecięcie z wykorzystaniem 'intersects', by uwzględnić piksele przybrzeżne
+            clipped_grid = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
             df_do_mapy = clipped_grid
         else:
-            # Fallback - jeśli brak pliku GeoJSON, pokaże cały BBOX
             df_do_mapy = df_grid
 
-        # Przygotowanie danych do wyrenderowania gradientu
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
                 "lat": row['latitude'],
@@ -89,49 +83,52 @@ def pobierz_rzeczywiste_zasolenie():
                 "psu": row['so']
             })
 
-        return wyniki, siatka_gradientu, str(ostatni_czas.time.values)[:10]
+        return wyniki, siatka_gradientu, str(ostatni_czas.time.values)[:10], status_maski
 
     except Exception as e:
-        st.error(f"⚠️ Błąd połączenia z API lub przetwarzania danych: {e}")
-        return None, None, None
+        st.error(f"⚠️ Błąd strukturalny: {e}")
+        return None, None, None, "blad"
 
 
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Zasolenia (Dane Rzeczywiste CMEMS)")
-    st.markdown("""
-    Autonomiczny moduł analityczny prezentujący przestrzenny rozkład zasolenia [PSU] na podstawie 
-    otwartych danych numerycznych (Copernicus Marine Service). Dane maskowane do obszaru Zalewu Szczecińskiego.
-    """)
+    st.header("🌊 Monitorowanie Zasolenia (CMEMS)")
 
-    with st.spinner("Pobieranie macierzy NetCDF i maskowanie przestrzenne..."):
-        dane_rzeczywiste, siatka_gradientu, data_modelu = pobierz_rzeczywiste_zasolenie()
+    with st.spinner("Przetwarzanie zapytań przestrzennych NetCDF..."):
+        dane_rzeczywiste, siatka_gradientu, data_modelu, status_maski = pobierz_rzeczywiste_zasolenie()
 
     if not dane_rzeczywiste:
-        st.warning("Skonfiguruj poprawnie dane logowania w st.secrets i upewnij się, że API odpowiada.")
+        st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP.")
         return
 
-    st.success(f"✅ Przeprowadzono analizę przestrzenną modelu z dnia: {data_modelu}")
+    if status_maski == "brak":
+        st.warning(
+            "Brak pliku 'zalew_maska.geojson' w głównym folderze aplikacji. System wyrenderował pełny zasięg BBOX.")
+    else:
+        st.success(f"✅ Poligon Zalewu Szczecińskiego wczytany poprawnie. Data modelu: {data_modelu}")
 
-    # ---------------------------------------------------------
-    # 1. SEKCJA MAPY INTERAKTYWNEJ
-    # ---------------------------------------------------------
-    st.subheader("🗺️ Ciągła mapa zasolenia i odczyty punktowe")
+    st.subheader("🗺️ Analityczna mapa gradientowa")
     m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="CartoDB positron")
 
     def dobierz_kolor(psu):
         if psu < 1.0:
-            return "#2b83ba"  # Słodka (niebieski)
+            return "#2b83ba"
         elif psu < 2.5:
-            return "#abdda4"  # Przejściowa (zielonkawy)
+            return "#abdda4"
         elif psu < 4.5:
-            return "#fdae61"  # Słonawa (pomarańczowy)
+            return "#fdae61"
         else:
-            return "#d7191c"  # Morska (czerwony)
+            return "#d7191c"
 
-    # Przybliżona rozdzielczość piksela modelu CMEMS (ok. 1 mili morskiej w stopniach)
+    # Nałożenie granic fizycznego poligonu na mapę w celu kontroli przestrzennej
+    if status_maski == "zaladowana":
+        folium.GeoJson(
+            "zalew_maska.geojson",
+            name="Maska Cięcia",
+            style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
+        ).add_to(m_zas)
+
     rozdzielczosc = 0.008
 
-    # Renderowanie siatki wyciętej maską GeoJSON
     for piksel in siatka_gradientu:
         lat = piksel["lat"]
         lon = piksel["lon"]
@@ -144,26 +141,22 @@ def renderuj_modul_zasolenia():
             weight=0,
             fill=True,
             fill_color=kolor,
-            fill_opacity=0.45
+            fill_opacity=0.65  # Podniesiona nieprzezroczystość dla zatarcia granic między pikselami
         ).add_to(m_zas)
 
-    # Renderowanie precyzyjnych markerów stacji
     for nazwa, info in dane_rzeczywiste.items():
         kolor = dobierz_kolor(info["psu"])
         folium.CircleMarker(
-            location=info["coords"], radius=10,
-            popup=f"<b>{nazwa}</b><br>Zasolenie: {info['psu']} PSU<br>Typ: {info['typ']}",
+            location=info["coords"], radius=9,
+            popup=f"<b>{nazwa}</b><br>Zasolenie: {info['psu']} PSU",
             tooltip=f"{nazwa}: {info['psu']} PSU",
             color="#ffffff", weight=2, fill=True, fill_color=kolor, fill_opacity=1.0
         ).add_to(m_zas)
 
     st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
-    # ---------------------------------------------------------
-    # 2. SEKCJA WYNIKÓW I EKSPORTU CSV (Excel)
-    # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader("📊 Wyniki pomiarów na stacjach referencyjnych (PSU)")
+    st.subheader("📊 Agregacja wyników punktowych (PSU)")
 
     df_wyniki = pd.DataFrame.from_dict(dane_rzeczywiste, orient='index')
     df_wyniki.index.name = "Stacja"
@@ -175,17 +168,13 @@ def renderuj_modul_zasolenia():
 
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-
-        # Oczyszczanie danych do pliku eksportowego
         df_eksport = df_wyniki.copy()
         df_eksport.columns = [usun_polskie_znaki(col) for col in df_eksport.columns]
         df_eksport['Stacja'] = df_eksport['Stacja'].apply(usun_polskie_znaki)
-
-        # Generowanie czystego CSV pod polskiego Excela
         csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
 
         st.download_button(
-            label="📥 Pobierz stacje bazowe do Excela (CSV)",
+            label="📥 Wygeneruj zrzut referencyjny (CSV)",
             data=csv_data,
             file_name=f"zasolenie_estuarium_{data_modelu}.csv",
             mime="text/csv"
