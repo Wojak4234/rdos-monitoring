@@ -128,22 +128,16 @@ def pobierz_szereg_czasowy_zasolenia_30_dni():
 
 
 def pobierz_dane_gee_dem():
-    """Pobiera model wysokościowy terenu z Google Earth Engine dla obszaru Zalewu"""
     maska_path = "zalew_maska.geojson"
     if not os.path.exists(maska_path):
-        return None, "brak"
+        return None, "brak", None, None
 
     zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
     minx, miny, maxx, maxy = zalew_gdf.total_bounds
 
-    # Definiowanie geometrycznego obszaru zainteresowania w GEE
     roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
-
-    # Użycie Copernicus DEM GLO-30 (wysoka rozdzielczość 30m)
     dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(roi)
 
-    # Pobieramy próbkę punktów (siatkę) z GEE do lokalnego DataFrame
-    # Skala 1000m zapewnia optymalną gęstość punktów do płynnej interpolacji wtyczki
     try:
         punkty_ee = dem.sample(
             region=roi,
