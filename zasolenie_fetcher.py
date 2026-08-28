@@ -43,7 +43,7 @@ def renderuj_modul_zasolenia():
             "psu": 1.4,
             "typ": "Strefa przejściowa"
         },
-        "Północne Police (na pn. od Wielkiego Kmi": {
+        "Północne Police (na pn. od Wielkiego Karwu": {
         "coords": [53.5831, 14.2985],  # 53°44'59.1"N, 14°17'51.5"E
         "psu": 0.9,
         "typ": "Roztoka Odrzańska"
