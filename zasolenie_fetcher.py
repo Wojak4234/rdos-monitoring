@@ -25,16 +25,17 @@ KONFIGURACJA_PARAMETROW = {
         "cmap": "jet",
         "legend_colors": ['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                           '#7f0000'],
-        "dataset_id": "cmems_mod_bal_phy_anfc_P1D-m",  # Model dzienny 3D
+        "dataset_id": "cmems_mod_bal_phy_anfc_P1D-m",  # Model Bałtyku (Zasolenie)
         "zmienna": "so"
     },
     "zos": {
-        "nazwa": "Poziom lustra wody (Bieżące wezbranie)",
+        "nazwa": "Wysokość lustra wody (Bieżące wezbranie)",
         "jednostka": "m",
         "cmap": "coolwarm",
         "legend_colors": ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                           '#d73027'],
-        "dataset_id": "cmems_mod_bal_phy_anfc_PT1H-i",  # Model godzinowy (bardzo dokładny)
+        "dataset_id": "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m",
+        # Godzinowy Model Globalny (100% gwarancji obecności 'zos')
         "zmienna": "zos"
     }
 }
@@ -66,18 +67,17 @@ def pobierz_rzeczywiste_dane(parametr="so"):
         # Zawsze pobieramy najnowszą dostępną godzinę/dzień z modelu
         ostatni_czas = ds.isel(time=-1)
 
-        # Jeśli to zasolenie, bierzemy z powierzchni (depth=0)
-        if parametr == "so":
-            bbox_ds = ostatni_czas[konf["zmienna"]].sel(
-                latitude=slice(53.40, 54.00),
-                longitude=slice(14.15, 14.80)
-            ).isel(depth=0)
-        else:
-            # Jeśli to poziom wody (zos), zmienna jest 2D, więc nie ma "depth"
-            bbox_ds = ostatni_czas[konf["zmienna"]].sel(
-                latitude=slice(53.40, 54.00),
-                longitude=slice(14.15, 14.80)
-            )
+        # Bezpieczne przycinanie koordynat
+        bbox_ds = ostatni_czas[konf["zmienna"]].sel(
+            latitude=slice(53.40, 54.00),
+            longitude=slice(14.15, 14.80)
+        )
+
+        # Niezawodny mechanizm obchodzenia wymiaru depth (tylko 3D)
+        try:
+            bbox_ds = bbox_ds.isel(depth=0)
+        except Exception:
+            pass  # Dataset jest 2D, co jest poprawne dla wysokości lustra wody
 
         df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[konf["zmienna"]])
 
@@ -115,17 +115,21 @@ def pobierz_szereg_czasowy_30_dni(parametr="so"):
             username=user, password=pwd
         )
 
-        # Jeśli to model godzinowy, bierzemy 720 ostatnich godzin (30 dni) ze skokiem co 24h
-        if parametr == "zos":
-            ostatnie_30 = ds.isel(time=slice(-720, None, 24))
-        else:
-            ostatnie_30 = ds.isel(time=slice(-30, None))
+        total_times = len(ds.time)
 
-        if parametr == "so":
-            bbox_ds = ostatnie_30[konf["zmienna"]].sel(latitude=slice(53.40, 54.00),
-                                                       longitude=slice(14.15, 14.80)).isel(depth=0)
+        # Skaczemy co 24h dla modelu godzinowego, żeby nie przeciążać wykresu dla ostatnich 30 dni
+        if parametr == "zos":
+            start_idx = max(-720, -total_times)
+            ostatnie_30 = ds.isel(time=slice(start_idx, None, 24))
         else:
-            bbox_ds = ostatnie_30[konf["zmienna"]].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+            start_idx = max(-30, -total_times)
+            ostatnie_30 = ds.isel(time=slice(start_idx, None))
+
+        bbox_ds = ostatnie_30[konf["zmienna"]].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+        try:
+            bbox_ds = bbox_ds.isel(depth=0)
+        except Exception:
+            pass
 
         df = bbox_ds.to_dataframe().reset_index().dropna(subset=[konf["zmienna"]])
 
@@ -161,7 +165,7 @@ def renderuj_modul_zasolenia():
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
-    with st.spinner(f"Odpytuję serwery Copernicus ({konf['dataset_id']})..."):
+    with st.spinner(f"Odpytuję najnowsze mapy Copernicus ({konf['dataset_id']})..."):
         siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_dane(parametr)
 
     if not siatka_gradientu:
@@ -172,7 +176,7 @@ def renderuj_modul_zasolenia():
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
     st.success("✅ Dane pobrane i przeliczone przestrzennie pomyślnie.")
 
-    st.info(f"📅 **Moment wykonania pomiaru:** {data_modelu} (Dane bieżące z systemu CMEMS)")
+    st.info(f"📅 **Stan i aktualność danych na mapie:** {data_modelu} UTC (System analiz bieżących)")
 
     # --- KARTY KPI ---
     c1, c2, c3 = st.columns(3)
@@ -243,7 +247,7 @@ def renderuj_modul_zasolenia():
                     fill=True,
                     fill_color='transparent',
                     fill_opacity=0,
-                    tooltip=f"Odczyt z sondy: <br><b>{row[val_col]:.3f} {konf['jednostka']}</b>"
+                    tooltip=f"Odczyt węzła z {data_modelu}: <br><b>{row[val_col]:.3f} {konf['jednostka']}</b>"
                 ).add_to(m_zas)
 
     if status_maski == "zaladowana":
@@ -331,6 +335,6 @@ def renderuj_modul_zasolenia():
         st.download_button(
             label="📥 Pobierz węzły modelu do Excela",
             data=csv_data,
-            file_name=f"{parametr}_siatka_odczyt.csv",
+            file_name=f"{parametr}_siatka_{str(data_modelu).replace(':', '').replace(' ', '_')}.csv",
             mime="text/csv"
         )
