@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from branca.element import Template, MacroElement
 
-# Ładujemy moduł GEE, ale NIE inicjalizujemy go tutaj, bo app.py robi to za nas!
+# Ładujemy moduł GEE (inicjalizowany wcześniej w app.py)
 import ee
 
 # Słownik konfiguracyjny dla parametrów
@@ -128,8 +128,8 @@ def pobierz_dane_gee_dem():
 
     try:
         roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
-        # Model wysokościowy Copernicus 30m
-        dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(roi)
+        # Rozwiązanie błędu GEE: używamy ImageCollection i łączymy kafelki funkcją mosaic() przed wycięciem
+        dem = ee.ImageCollection("COPERNICUS/DEM/GLO30").select('DEM').mosaic().clip(roi)
 
         # Pobieramy próbkę terenu do lokalnej analizy
         punkty_ee = dem.sample(
