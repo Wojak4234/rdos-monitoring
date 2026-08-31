@@ -17,7 +17,7 @@ from matplotlib.path import Path
 from branca.element import Template, MacroElement
 
 
-# Klasa konfiguracyjna, która eliminuje błędy typowania w IDE (str | list)
+# Klasa konfiguracyjna, która eliminuje błędy typowania w IDE
 class ParamConfig:
     def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, zmienna: str):
         self.nazwa = nazwa
@@ -35,7 +35,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model Bałtyku - 3D (Głębinowy)
         zmienna="so"
     ),
     "zos": ParamConfig(
@@ -44,7 +44,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_glo_phy_anfc_0.083deg_PT1H-m",
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-s",  # Model Bałtyku - 2D (Powierzchniowy) - gwarantuje obecność 'zos'
         zmienna="zos"
     )
 }
@@ -72,13 +72,16 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        ostatni_czas = ds.isel(time=-1)
+        # Odrzucamy prognozy z przyszłości. Pobieramy stan zlokalizowany najbliżej TERAZ
+        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
+        ostatni_czas = ds.sel(time=dzisiaj, method='nearest')
 
         bbox_ds = ostatni_czas[konf.zmienna].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
         )
 
+        # Jeśli to model 3D (Zasolenie), ucinamy wymiar głębokości do warstwy wierzchniej
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
@@ -119,16 +122,14 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        total_times = len(ds.time)
+        # Blokujemy wczytywanie prognoz. Bierzemy tylko faktyczną historię (od 30 dni temu do dziś)
+        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
+        trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
-        if parametr == "zos":
-            start_idx = max(-720, -total_times)
-            ostatnie_30 = ds.isel(time=slice(start_idx, None, 24))
-        else:
-            start_idx = max(-30, -total_times)
-            ostatnie_30 = ds.isel(time=slice(start_idx, None))
+        ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
         bbox_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
@@ -178,7 +179,7 @@ def renderuj_modul_zasolenia():
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
     st.success("✅ Dane pobrane i przeliczone przestrzennie pomyślnie.")
 
-    st.info(f"📅 **Stan i aktualność danych na mapie:** {data_modelu} UTC (System analiz bieżących)")
+    st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC (System odrzuca prognozy i pokazuje czas pomiaru bieżącego)")
 
     # --- KARTY KPI ---
     c1, c2, c3 = st.columns(3)
@@ -305,9 +306,9 @@ def renderuj_modul_zasolenia():
 
     st_folium(m_zas, width=1100, height=500, returned_objects=[])
 
-    # --- HISTORIA (DLA OBU ZMIENNYCH) ---
+    # --- HISTORIA ---
     st.markdown("---")
-    st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
+    st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni wstecz od dzisiaj)")
     with st.spinner("Pobieranie danych historycznych z CMEMS..."):
         szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
     if szereg_df is not None:
