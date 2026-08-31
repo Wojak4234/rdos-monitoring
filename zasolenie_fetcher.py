@@ -34,7 +34,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_PT1H-m",  # Wysokorozdzielczy, godzinowy model Bałtyku
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model 3D Bałtyku (średnia dobowa)
         zmienna="so"
     ),
     "zos": ParamConfig(
@@ -43,8 +43,8 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_bal_phy_anfc_PT1H-m",  # Ten sam model Bałtyku
-        zmienna="slev"  # Prawidłowa nazwa zmiennej SSH dla Bałtyku (Sea Level)
+        dataset_id="cmems_mod_bal_phy_anfc_PT1H-i",  # Model 2D Bałtyku (dane live godzinowe, "i" - instantaneous)
+        zmienna="slev"
     )
 }
 
@@ -71,23 +71,35 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             username=user, password=pwd
         )
 
+        # Pancerne wykrywanie zmiennej w pliku
+        dostepne_zmienne = list(ds.data_vars.keys())
+        zmienna_docelowa = konf.zmienna
+        if zmienna_docelowa not in dostepne_zmienne:
+            if "zos" in dostepne_zmienne:
+                zmienna_docelowa = "zos"
+            elif "slev" in dostepne_zmienne:
+                zmienna_docelowa = "slev"
+            elif "so" in dostepne_zmienne:
+                zmienna_docelowa = "so"
+            else:
+                raise ValueError(f"Nie znaleziono odpowiedniej zmiennej w zbiorze. Dostępne: {dostepne_zmienne}")
+
         # Odrzucamy prognozy z przyszłości. Pobieramy stan historyczny/dzisiejszy
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
-        ds_past = ds.sel(time=slice(None, dzisiaj))
-        ostatni_czas = ds_past.isel(time=-1)
+        ostatni_czas = ds.sel(time=dzisiaj, method='nearest')
 
-        bbox_ds = ostatni_czas[konf.zmienna].sel(
+        bbox_ds = ostatni_czas[zmienna_docelowa].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
         )
 
-        # Jeśli to zmienna 3D (Zasolenie), ucinamy wymiar głębokości.
+        # Jeśli to zmienna 3D (Zasolenie), ucinamy wymiar głębokości do zera
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
             pass
 
-        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[konf.zmienna])
+        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -101,14 +113,14 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
 
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
-                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[konf.zmienna]
+                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[zmienna_docelowa]
             })
 
         data_odczytu = str(ostatni_czas.time.values)[:16].replace("T", " ")
-        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy
+        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, zmienna_docelowa
     except Exception as e:
         st.error(f"Błąd pobierania danych z Copernicusa: {e}")
-        return None, None, "blad", None, None
+        return None, None, "blad", None, None, None
 
 
 @st.cache_data(ttl=86400)
@@ -122,24 +134,34 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        # Filtrujemy dane do maksymalnie dzisiejszej daty (odcinamy prognozy w przód)
+        dostepne_zmienne = list(ds.data_vars.keys())
+        zmienna_docelowa = konf.zmienna
+        if zmienna_docelowa not in dostepne_zmienne:
+            if "zos" in dostepne_zmienne:
+                zmienna_docelowa = "zos"
+            elif "slev" in dostepne_zmienne:
+                zmienna_docelowa = "slev"
+            elif "so" in dostepne_zmienne:
+                zmienna_docelowa = "so"
+
+        # Filtrujemy dane do dzisiejszej daty (odcinamy prognozy)
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
-        # Oszczędzamy pamięć i API - z modelu godzinowego bierzemy próbkę co 24h na potrzeby trendu
+        # Oszczędzamy pamięć - z modelu godzinowego bierzemy próbkę co 24h na potrzeby trendu
         if "PT1H" in konf.dataset_id:
             ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
 
-        bbox_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+        bbox_ds = ostatnie_30[zmienna_docelowa].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
 
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
             pass
 
-        df = bbox_ds.to_dataframe().reset_index().dropna(subset=[konf.zmienna])
+        df = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -148,9 +170,9 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             grid_gdf = gpd.GeoDataFrame(df, geometry=geom, crs="EPSG:4326")
             df = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
 
-        szereg = df.groupby('time')[konf.zmienna].mean().reset_index()
-        szereg.rename(columns={'time': 'Data', konf.zmienna: f"Średnia ({konf.jednostka})"}, inplace=True)
-        szereg['Data'] = szereg['Data'].dt.date
+        szereg = df.groupby('time')[zmienna_docelowa].mean().reset_index()
+        szereg.rename(columns={'time': 'Data', zmienna_docelowa: f"Średnia ({konf.jednostka})"}, inplace=True)
+        szereg['Data'] = pd.to_datetime(szereg['Data']).dt.date
         return szereg
     except Exception:
         return None
@@ -173,10 +195,12 @@ def renderuj_modul_zasolenia():
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
     with st.spinner(f"Odpytuję najnowsze mapy Copernicus ({konf.dataset_id})..."):
-        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle = pobierz_rzeczywiste_dane(parametr)
+        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_rzeczywiste_dane(
+            parametr)
 
     if not siatka_gradientu:
-        st.warning("Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP dla Copernicusa.")
+        st.warning(
+            "Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP dla Copernicusa i model istnieje.")
         return
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
@@ -244,8 +268,7 @@ def renderuj_modul_zasolenia():
             name=f"Gradient - {konf.nazwa}"
         ).add_to(m_zas)
 
-        if df_piksle is not None:
-            val_col = konf.zmienna
+        if df_piksle is not None and aktywna_zmienna is not None:
             for idx, row in df_piksle.iterrows():
                 folium.CircleMarker(
                     location=(row['latitude'], row['longitude']),
@@ -254,7 +277,7 @@ def renderuj_modul_zasolenia():
                     fill=True,
                     fill_color='transparent',
                     fill_opacity=0,
-                    tooltip=f"Odczyt węzła z {data_modelu}: <br><b>{row[val_col]:.3f} {konf.jednostka}</b>"
+                    tooltip=f"Odczyt węzła z {data_modelu}: <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
                 ).add_to(m_zas)
 
     if status_maski == "zaladowana":
@@ -324,25 +347,26 @@ def renderuj_modul_zasolenia():
     st.markdown("---")
     st.subheader("📊 Tabela danych przestrzennych (Eksport Excel)")
 
-    df_eksport = df_piksle[['latitude', 'longitude', konf.zmienna]].copy()
-    df_eksport.rename(columns={
-        'latitude': 'Szerokosc Geograficzna',
-        'longitude': 'Dlugosc Geograficzna',
-        konf.zmienna: f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
-    }, inplace=True)
-    df_eksport.reset_index(drop=True, inplace=True)
+    if aktywna_zmienna is not None:
+        df_eksport = df_piksle[['latitude', 'longitude', aktywna_zmienna]].copy()
+        df_eksport.rename(columns={
+            'latitude': 'Szerokosc Geograficzna',
+            'longitude': 'Dlugosc Geograficzna',
+            aktywna_zmienna: f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
+        }, inplace=True)
+        df_eksport.reset_index(drop=True, inplace=True)
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.dataframe(df_eksport, use_container_width=True)
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.dataframe(df_eksport, use_container_width=True)
 
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
 
-        st.download_button(
-            label="📥 Pobierz węzły modelu do Excela",
-            data=csv_data,
-            file_name=f"{parametr}_siatka_{str(data_modelu).replace(':', '').replace(' ', '_')}.csv",
-            mime="text/csv"
-        )
+            st.download_button(
+                label="📥 Pobierz węzły modelu do Excela",
+                data=csv_data,
+                file_name=f"{parametr}_siatka_{str(data_modelu).replace(':', '').replace(' ', '_')}.csv",
+                mime="text/csv"
+            )
