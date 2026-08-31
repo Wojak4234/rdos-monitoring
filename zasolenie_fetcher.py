@@ -140,7 +140,7 @@ def renderuj_modul_zasolenia():
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
     with st.spinner(f"Przetwarzanie chmurowe Google Earth Engine dla {konf.nazwa}..."):
-        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_dane_gee(parametr)
+        siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_dane_z_gee(parametr)
 
     if not siatka_gradientu:
         st.warning("Nie udało się pobrać danych z Google Earth Engine. Sprawdź plik maski zalewu.")
