@@ -17,16 +17,14 @@ from branca.element import Template, MacroElement
 
 
 class ParamConfig:
-    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, zmienna: str):
+    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, typ_zmiennej: str):
         self.nazwa = nazwa
         self.jednostka = jednostka
         self.cmap = cmap
         self.legend_colors = legend_colors
-        self.zmienna = zmienna
+        self.dataset_id = dataset_id
+        self.typ_zmiennej = typ_zmiennej
 
-
-# Używamy jednego, w 100% stabilnego i istniejącego zbioru danych Bałtyku dla obu parametrów
-DATASET_ID = "cmems_mod_bal_phy_anfc_P1D-m"
 
 KONFIGURACJA_PARAMETROW = {
     "so": ParamConfig(
@@ -35,15 +33,17 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        zmienna="so"
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Główny zbiór Bałtyku (Zasolenie, 3D)
+        typ_zmiennej="zasolenie"
     ),
-    "thetao": ParamConfig(
-        nazwa="Temperatura wody (Stan termiczny)",
-        jednostka="°C",
-        cmap="YlOrRd",
-        legend_colors=['#ffffcc', '#ffeda0', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#bd0026',
-                       '#800026'],
-        zmienna="thetao"
+    "zos": ParamConfig(
+        nazwa="Wysokość lustra wody (Bieżące wezbranie / Cofka)",
+        jednostka="m",
+        cmap="coolwarm",
+        legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
+                       '#d73027'],
+        dataset_id="cmems_mod_bal_phy_anfc_PT15M-i",  # Najnowszy zbiór 15-minutowy (Posiada Sea Level, 2D)
+        typ_zmiennej="poziom_wody"
     )
 }
 
@@ -51,6 +51,23 @@ KONFIGURACJA_PARAMETROW = {
 def usun_polskie_znaki(tekst: str) -> str:
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+
+
+def precyzyjne_szukanie_zmiennej(ds, oczekiwany_typ):
+    """Gwarantuje, że nie podmienimy poziomu wody na zasolenie w razie braku zmiennej"""
+    dostepne = list(ds.data_vars.keys())
+
+    if oczekiwany_typ == "poziom_wody":
+        for var in dostepne:
+            v_low = var.lower()
+            if any(k in v_low for k in ["slev", "zos", "ssh", "sea_surface_height", "level", "elevation"]):
+                return var
+    elif oczekiwany_typ == "zasolenie":
+        for var in dostepne:
+            if any(k in var.lower() for k in ["so", "salinity", "salt"]):
+                return var
+
+    raise ValueError(f"Brak pożądanej zmiennej w pliku. Dostępne zmienne: {dostepne}")
 
 
 @st.cache_data(ttl=3600)
@@ -66,14 +83,17 @@ def pobierz_stabilne_dane_copernicus(parametr: str = "so"):
         pwd = st.secrets["copernicus"]["password"]
 
         ds = copernicusmarine.open_dataset(
-            dataset_id=DATASET_ID,
+            dataset_id=konf.dataset_id,
             username=user, password=pwd
         )
 
+        zmienna = precyzyjne_szukanie_zmiennej(ds, konf.typ_zmiennej)
+
+        # Wybieramy datę odcinając prognozy
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         ds_time = ds.sel(time=dzisiaj, method='nearest')
 
-        sub = ds_time[konf.zmienna].sel(
+        sub = ds_time[zmienna].sel(
             latitude=slice(53.40, 54.00),
             longitude=slice(14.15, 14.80)
         )
@@ -92,7 +112,7 @@ def pobierz_stabilne_dane_copernicus(parametr: str = "so"):
             for j, lon in enumerate(lons):
                 v = vals[i, j] if vals.ndim == 2 else vals.item()
                 if not np.isnan(v):
-                    rows.append({'latitude': float(lat), 'longitude': float(lon), konf.zmienna: float(v)})
+                    rows.append({'latitude': float(lat), 'longitude': float(lon), zmienna: float(v)})
 
         df_grid_raw = pd.DataFrame(rows)
         if df_grid_raw.empty:
@@ -110,11 +130,11 @@ def pobierz_stabilne_dane_copernicus(parametr: str = "so"):
 
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
-                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[konf.zmienna]
+                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[zmienna]
             })
 
         data_odczytu = str(ds_time.time.values)[:16].replace("T", " ")
-        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, konf.zmienna
+        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, zmienna
     except Exception as e:
         st.error(f"Błąd pobierania danych z Copernicusa: {e}")
         return None, None, "blad", None, None, None
@@ -127,15 +147,24 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
         ds = copernicusmarine.open_dataset(
-            dataset_id=DATASET_ID,
+            dataset_id=konf.dataset_id,
             username=user, password=pwd
         )
+
+        zmienna = precyzyjne_szukanie_zmiennej(ds, konf.typ_zmiennej)
 
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
-        sub_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+
+        # Oszczędność RAM: Z 15-minutowego pobieramy próbkę co 96 wpisów (czyli 1 na dobę)
+        if "PT15M" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 96))
+        elif "PT1H" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
+
+        sub_ds = ostatnie_30[zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
         try:
             sub_ds = sub_ds.isel(depth=0)
         except Exception:
@@ -154,36 +183,36 @@ def renderuj_modul_zasolenia():
     st.header("🌊 Monitorowanie Hydrofizyczne (Model Bałtyku CMEMS)")
 
     wybrany_parametr_opcja = st.radio(
-        "Wybierz parametr do analizy:",
-        options=["Zasolenie wody", "Temperatura wody (Termika)"],
+        "Wybierz parametr przestrzenny do analizy:",
+        options=["Zasolenie wody", "Wysokość lustra wody (Podtopienia/Przejezdność)"],
         horizontal=True
     )
 
     if "Zasolenie" in wybrany_parametr_opcja:
         parametr = "so"
     else:
-        parametr = "thetao"
+        parametr = "zos"
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
-    with st.spinner(f"Pobieranie stabilnych danych z serwera Copernicus ({DATASET_ID})..."):
+    with st.spinner(f"Odpytuję {konf.dataset_id} z parametrem: {konf.nazwa}..."):
         siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_stabilne_dane_copernicus(
             parametr)
 
     if not siatka_gradientu:
-        st.warning("Pobieranie przerwane. Sprawdź poprawne poświadczenia w st.secrets.")
+        st.warning("Pobieranie przerwane. Moduł OPeNDAP mógł odrzucić zapytanie.")
         return
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
-    st.success("✅ Dane pobrane i przeliczone pomyślnie.")
+    st.success(f"✅ Przestrzenny model '{konf.nazwa}' pobrany pomyślnie.")
 
     st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Minimalny wynik", f"{val_min:.2f} {konf.jednostka}")
-    c2.metric("Średni wynik", f"{val_mean:.2f} {konf.jednostka}")
-    c3.metric("Maksymalny wynik", f"{val_max:.2f} {konf.jednostka}")
+    c1.metric("Minimalny wynik", f"{val_min:.3f} {konf.jednostka}")
+    c2.metric("Średni wynik", f"{val_mean:.3f} {konf.jednostka}")
+    c3.metric("Maksymalny wynik", f"{val_max:.3f} {konf.jednostka}")
 
     st.subheader(f"🗺️ Mapa przestrzenna: {konf.nazwa}")
 
@@ -257,7 +286,7 @@ def renderuj_modul_zasolenia():
                         fill=True,
                         fill_color='transparent',
                         fill_opacity=0,
-                        tooltip=f"Węzeł: <br><b>{row[aktywna_zmienna]:.2f} {konf.jednostka}</b>"
+                        tooltip=f"Odczyt: <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
                     ).add_to(m_zas)
 
         if status_maski == "zaladowana":
@@ -297,11 +326,11 @@ def renderuj_modul_zasolenia():
                     ">
                 </div>
                 <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
-                    <span>{val_max:.1f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.75:.1f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.5:.1f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.25:.1f}</span>
-                    <span>{val_min:.1f}</span>
+                    <span>{val_max:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
+                    <span>{val_min:.2f}</span>
                 </div>
             </div>
         </div>
