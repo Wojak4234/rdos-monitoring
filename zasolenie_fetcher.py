@@ -42,7 +42,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_bal_phy_anfc_PT15M-i",  # Najnowszy zbiór 15-minutowy (Posiada Sea Level, 2D)
+        dataset_id="cmems_mod_bal_phy_anfc_PT15M-i",  # Zbiór 15-minutowy Bałtyku (Posiada Sea Level Anomaly)
         typ_zmiennej="poziom_wody"
     )
 }
@@ -54,13 +54,14 @@ def usun_polskie_znaki(tekst: str) -> str:
 
 
 def precyzyjne_szukanie_zmiennej(ds, oczekiwany_typ):
-    """Gwarantuje, że nie podmienimy poziomu wody na zasolenie w razie braku zmiennej"""
-    dostepne = list(ds.data_vars.keys())
+    """Gwarantuje poprawne znalezienie zmiennej (nawet z formatu numpy string)"""
+    dostepne = [str(var) for var in ds.data_vars.keys()]
 
     if oczekiwany_typ == "poziom_wody":
         for var in dostepne:
             v_low = var.lower()
-            if any(k in v_low for k in ["slev", "zos", "ssh", "sea_surface_height", "level", "elevation"]):
+            # "sla" to Sea Level Anomaly - idealny wskaźnik wezbrań
+            if any(k in v_low for k in ["sla", "slev", "zos", "ssh", "sea_surface_height", "level"]):
                 return var
     elif oczekiwany_typ == "zasolenie":
         for var in dostepne:
@@ -89,7 +90,6 @@ def pobierz_stabilne_dane_copernicus(parametr: str = "so"):
 
         zmienna = precyzyjne_szukanie_zmiennej(ds, konf.typ_zmiennej)
 
-        # Wybieramy datę odcinając prognozy
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         ds_time = ds.sel(time=dzisiaj, method='nearest')
 
@@ -158,7 +158,6 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
-        # Oszczędność RAM: Z 15-minutowego pobieramy próbkę co 96 wpisów (czyli 1 na dobę)
         if "PT15M" in konf.dataset_id:
             ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 96))
         elif "PT1H" in konf.dataset_id:
@@ -195,7 +194,7 @@ def renderuj_modul_zasolenia():
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
-    with st.spinner(f"Odpytuję {konf.dataset_id} z parametrem: {konf.nazwa}..."):
+    with st.spinner(f"Odpytuję model Copernicus... Zmienna docelowa: {konf.typ_zmiennej}"):
         siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_stabilne_dane_copernicus(
             parametr)
 
@@ -205,7 +204,7 @@ def renderuj_modul_zasolenia():
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
-    st.success(f"✅ Przestrzenny model '{konf.nazwa}' pobrany pomyślnie.")
+    st.success(f"✅ Przestrzenny model '{konf.nazwa}' (zmienna: {aktywna_zmienna}) pobrany pomyślnie.")
 
     st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC")
 
