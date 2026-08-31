@@ -58,16 +58,12 @@ def znajdz_wlasciwa_zmienne(ds, preferowana):
     dostepne = list(ds.data_vars.keys())
     if preferowana in dostepne:
         return preferowana
-
-    # Inteligentne szukanie zamienników dla poziomu wody
     for var in dostepne:
         v_lower = var.lower()
         if preferowana == "zos" and any(k in v_lower for k in ["zos", "slev", "sea_surface_height", "level", "height"]):
             return var
         if preferowana == "so" and any(k in v_lower for k in ["so", "salinity", "salt"]):
             return var
-
-    # Jeśli nie znajdzie pasującej, zwraca pierwszą lepszą numeryczną
     return dostepne[0] if dostepne else preferowana
 
 
@@ -140,7 +136,7 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
         data_odczytu = str(ds_time.time.values)[:16].replace("T", " ")
         return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, 'wartosc_zmiennej'
     except Exception as e:
-        st.error(f"Błąd pobierania danych z Copernicusa: {e}")
+        st.error(f"Błąd komunikacji z serwerem Copernicus: {e}")
         return None, None, "blad", None, None, None
 
 
@@ -210,7 +206,7 @@ def renderuj_modul_zasolenia():
             parametr)
 
     if not siatka_gradientu:
-        st.warning("Pobieranie przerwane. Sprawdź, czy model istnieje na serwerach Copernicusa.")
+        st.warning("Pobieranie przerwane lub chwilowy brak odpowiedzi z serwera Copernicus. Spróbuj odświeżyć stronę.")
         return
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
@@ -225,162 +221,173 @@ def renderuj_modul_zasolenia():
     c3.metric("Maksymalny wynik", f"{val_max:.3f} {konf.jednostka}")
 
     st.subheader(f"🗺️ Bieżąca mapa przestrzenna: {konf.nazwa}")
-    m_zas = folium.Map(location=(53.75, 14.45), zoom_start=10, tiles="OpenStreetMap")
 
-    if len(siatka_gradientu) > 3:
-        lats = np.array([p["lat"] for p in siatka_gradientu])
-        lons = np.array([p["lon"] for p in siatka_gradientu])
+    try:
+        m_zas = folium.Map(location=(53.75, 14.45), zoom_start=10, tiles="OpenStreetMap")
+
+        if len(siatka_gradientu) > 3:
+            lats = np.array([p["lat"] for p in siatka_gradientu])
+            lons = np.array([p["lon"] for p in siatka_gradientu])
+
+            if status_maski == "zaladowana":
+                minx, miny, maxx, maxy = zalew_gdf.total_bounds
+            else:
+                minx, miny, maxx, maxy = lons.min(), lats.min(), lons.max(), lats.max()
+
+            grid_lon, grid_lat = np.meshgrid(
+                np.linspace(minx - 0.02, maxx + 0.02, 500),
+                np.linspace(miny - 0.02, maxy + 0.02, 500)
+            )
+
+            lats_jitter = lats + np.random.normal(0, 1e-6, size=lats.shape)
+            lons_jitter = lons + np.random.normal(0, 1e-6, size=lons.shape)
+
+            try:
+                grid_vals_smooth = griddata((lons_jitter, lats_jitter), vals_array, (grid_lon, grid_lat),
+                                            method='linear')
+            except Exception:
+                grid_vals_smooth = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
+
+            grid_vals_near = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
+            grid_vals = np.where(np.isnan(grid_vals_smooth), grid_vals_near, grid_vals_smooth)
+
+            if status_maski == "zaladowana":
+                pts = np.vstack((grid_lon.flatten(), grid_lat.flatten())).T
+                mask = np.zeros(pts.shape[0], dtype=bool)
+                for geom in zalew_gdf.geometry:
+                    if geom.geom_type == 'Polygon':
+                        mask = mask | Path(np.asarray(geom.exterior.coords)).contains_points(pts)
+                    elif geom.geom_type == 'MultiPolygon':
+                        for poly in geom.geoms:
+                            mask = mask | Path(np.asarray(poly.exterior.coords)).contains_points(pts)
+                grid_vals.flat[~mask] = np.nan
+
+            fig = plt.figure(figsize=(10, 10))
+            ax = fig.add_subplot(111)
+            ax.axis('off')
+            fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+            ax.contourf(grid_lon, grid_lat, grid_vals, levels=50, cmap=konf.cmap, alpha=0.65)
+
+            img_buf = io.BytesIO()
+            plt.savefig(img_buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0)
+            plt.close(fig)
+            img_buf.seek(0)
+            img_base64 = base64.b64encode(img_buf.read()).decode('utf-8')
+
+            img_bounds = [[miny - 0.02, minx - 0.02], [maxy + 0.02, maxx + 0.02]]
+            folium.raster_layers.ImageOverlay(
+                image=f"data:image/png;base64,{img_base64}",
+                bounds=img_bounds,
+                opacity=0.75,
+                name=f"Gradient - {konf.nazwa}"
+            ).add_to(m_zas)
+
+            if df_piksle is not None and aktywna_zmienna is not None:
+                for idx, row in df_piksle.iterrows():
+                    folium.CircleMarker(
+                        location=(row['latitude'], row['longitude']),
+                        radius=12,
+                        color='transparent',
+                        fill=True,
+                        fill_color='transparent',
+                        fill_opacity=0,
+                        tooltip=f"Węzeł ({data_modelu}): <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
+                    ).add_to(m_zas)
 
         if status_maski == "zaladowana":
-            minx, miny, maxx, maxy = zalew_gdf.total_bounds
-        else:
-            minx, miny, maxx, maxy = lons.min(), lats.min(), lons.max(), lats.max()
+            folium.GeoJson(
+                "zalew_maska.geojson",
+                name="Linia brzegowa",
+                style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
+            ).add_to(m_zas)
 
-        grid_lon, grid_lat = np.meshgrid(
-            np.linspace(minx - 0.02, maxx + 0.02, 500),
-            np.linspace(miny - 0.02, maxy + 0.02, 500)
-        )
+        kolory_str = ", ".join([f"{kolor} {i * 12.5}%" for i, kolor in enumerate(konf.legend_colors)])
+        krotka_nazwa = str(konf.nazwa).split(' ')[0]
 
-        lats_jitter = lats + np.random.normal(0, 1e-6, size=lats.shape)
-        lons_jitter = lons + np.random.normal(0, 1e-6, size=lons.shape)
-
-        try:
-            grid_vals_smooth = griddata((lons_jitter, lats_jitter), vals_array, (grid_lon, grid_lat), method='linear')
-        except Exception:
-            grid_vals_smooth = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
-
-        grid_vals_near = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
-        grid_vals = np.where(np.isnan(grid_vals_smooth), grid_vals_near, grid_vals_smooth)
-
-        if status_maski == "zaladowana":
-            pts = np.vstack((grid_lon.flatten(), grid_lat.flatten())).T
-            mask = np.zeros(pts.shape[0], dtype=bool)
-            for geom in zalew_gdf.geometry:
-                if geom.geom_type == 'Polygon':
-                    mask = mask | Path(np.asarray(geom.exterior.coords)).contains_points(pts)
-                elif geom.geom_type == 'MultiPolygon':
-                    for poly in geom.geoms:
-                        mask = mask | Path(np.asarray(poly.exterior.coords)).contains_points(pts)
-            grid_vals.flat[~mask] = np.nan
-
-        fig = plt.figure(figsize=(10, 10))
-        ax = fig.add_subplot(111)
-        ax.axis('off')
-        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
-
-        ax.contourf(grid_lon, grid_lat, grid_vals, levels=50, cmap=konf.cmap, alpha=0.65)
-
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0)
-        plt.close(fig)
-        img_buf.seek(0)
-        img_base64 = base64.b64encode(img_buf.read()).decode('utf-8')
-
-        img_bounds = [[miny - 0.02, minx - 0.02], [maxy + 0.02, maxx + 0.02]]
-        folium.raster_layers.ImageOverlay(
-            image=f"data:image/png;base64,{img_base64}",
-            bounds=img_bounds,
-            opacity=0.75,
-            name=f"Gradient - {konf.nazwa}"
-        ).add_to(m_zas)
-
-        if df_piksle is not None and aktywna_zmienna is not None:
-            for idx, row in df_piksle.iterrows():
-                folium.CircleMarker(
-                    location=(row['latitude'], row['longitude']),
-                    radius=12,
-                    color='transparent',
-                    fill=True,
-                    fill_color='transparent',
-                    fill_opacity=0,
-                    tooltip=f"Węzeł ({data_modelu}): <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
-                ).add_to(m_zas)
-
-    if status_maski == "zaladowana":
-        folium.GeoJson(
-            "zalew_maska.geojson",
-            name="Linia brzegowa",
-            style_function=lambda x: {'color': '#000000', 'weight': 1.5, 'fillOpacity': 0}
-        ).add_to(m_zas)
-
-    kolory_str = ", ".join([f"{kolor} {i * 12.5}%" for i, kolor in enumerate(konf.legend_colors)])
-    krotka_nazwa = str(konf.nazwa).split(' ')[0]
-
-    macro_html = f"""
-    {{% macro html(this, kwargs) %}}
-    <div style="
-        position: fixed; 
-        bottom: 50px;
-        right: 50px;
-        width: 140px;
-        height: 280px;
-        z-index:9999;
-        font-size:13px;
-        font-family: Arial, sans-serif;
-        background-color: rgba(255, 255, 255, 0.9);
-        border: 2px solid #ccc;
-        border-radius: 5px;
-        padding: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        ">
-        <b>{krotka_nazwa}<br>[{konf.jednostka}]</b><br><br>
-        <div style="display: flex; flex-direction: row; height: 180px;">
-            <div style="
-                background: linear-gradient(to top, {kolory_str});
-                width: 25px;
-                height: 100%;
-                border: 1px solid #555;
-                ">
-            </div>
-            <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
-                <span>{val_max:.2f}</span>
-                <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
-                <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
-                <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
-                <span>{val_min:.2f}</span>
+        macro_html = f"""
+        {{% macro html(this, kwargs) %}}
+        <div style="
+            position: fixed; 
+            bottom: 50px;
+            right: 50px;
+            width: 140px;
+            height: 280px;
+            z-index:9999;
+            font-size:13px;
+            font-family: Arial, sans-serif;
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 2px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            ">
+            <b>{krotka_nazwa}<br>[{konf.jednostka}]</b><br><br>
+            <div style="display: flex; flex-direction: row; height: 180px;">
+                <div style="
+                    background: linear-gradient(to top, {kolory_str});
+                    width: 25px;
+                    height: 100%;
+                    border: 1px solid #555;
+                    ">
+                </div>
+                <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
+                    <span>{val_max:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
+                    <span>{val_min:.2f}</span>
+                </div>
             </div>
         </div>
-    </div>
-    {{% endmacro %}}
-    """
-    macro = MacroElement()
-    macro._template = Template(macro_html)
-    m_zas.add_child(macro)
+        {{% endmacro %}}
+        """
+        macro = MacroElement()
+        macro._template = Template(macro_html)
+        m_zas.add_child(macro)
 
-    st_folium(m_zas, width=1100, height=500, returned_objects=[])
+        st_folium(m_zas, width=1100, height=500, returned_objects=[])
+    except Exception as e:
+        st.warning(f"Nie udało się w pełni wyrenderować warstwy graficznej mapy: {e}")
 
     st.markdown("---")
     st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
-    with st.spinner("Pobieranie danych historycznych z CMEMS..."):
-        szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
-    if szereg_df is not None and not szereg_df.empty:
-        st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#d73027")
-    else:
-        st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
+    try:
+        with st.spinner("Pobieranie danych historycznych z CMEMS..."):
+            szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
+        if szereg_df is not None and not szereg_df.empty:
+            st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#d73027")
+        else:
+            st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
+    except Exception:
+        st.info("Wykres historyczny niedostępny w tym cyklu.")
 
     st.markdown("---")
     st.subheader("📊 Tabela danych przestrzennych (Eksport Excel)")
 
     if aktywna_zmienna is not None:
-        df_eksport = df_piksle[['latitude', 'longitude', 'wartosc_zmiennej']].copy()
-        df_eksport.rename(columns={
-            'latitude': 'Szerokosc Geograficzna',
-            'longitude': 'Dlugosc Geograficzna',
-            'wartosc_zmiennej': f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
-        }, inplace=True)
-        df_eksport.reset_index(drop=True, inplace=True)
+        try:
+            df_eksport = df_piksle[['latitude', 'longitude', 'wartosc_zmiennej']].copy()
+            df_eksport.rename(columns={
+                'latitude': 'Szerokosc Geograficzna',
+                'longitude': 'Dlugosc Geograficzna',
+                'wartosc_zmiennej': f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
+            }, inplace=True)
+            df_eksport.reset_index(drop=True, inplace=True)
 
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            st.dataframe(df_eksport, width='stretch')
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.dataframe(df_eksport, width='stretch')
 
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
+            with col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                csv_data = df_eksport.to_csv(sep=';', encoding='utf-8-sig', index=False).encode('utf-8-sig')
 
-            st.download_button(
-                label="📥 Pobierz węzły modelu do Excela",
-                data=csv_data,
-                file_name=f"{parametr}_siatka_{str(data_modelu).replace(':', '').replace(' ', '_')}.csv",
-                mime="text/csv"
-            )
+                st.download_button(
+                    label="📥 Pobierz węzły modelu do Excela",
+                    data=csv_data,
+                    file_name=f"{parametr}_siatka_{str(data_modelu).replace(':', '').replace(' ', '_')}.csv",
+                    mime="text/csv"
+                )
+        except Exception:
+            st.warning("Tabela danych tymczasowo niedostępna.")
