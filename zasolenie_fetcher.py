@@ -17,16 +17,16 @@ from branca.element import Template, MacroElement
 
 
 class ParamConfig:
-    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, zmienna: str):
+    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str,
+                 domyslna_zmienna: str):
         self.nazwa = nazwa
         self.jednostka = jednostka
         self.cmap = cmap
         self.legend_colors = legend_colors
         self.dataset_id = dataset_id
-        self.zmienna = zmienna
+        self.domyslna_zmienna = domyslna_zmienna
 
 
-# Ścisłe rozdzielenie modeli i zmiennych, bez automatycznego podmieniania
 KONFIGURACJA_PARAMETROW = {
     "so": ParamConfig(
         nazwa="Zasolenie wody",
@@ -35,7 +35,7 @@ KONFIGURACJA_PARAMETROW = {
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
         dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
-        zmienna="so"
+        domyslna_zmienna="so"
     ),
     "zos": ParamConfig(
         nazwa="Wysokość lustra wody (Bieżące wezbranie)",
@@ -44,7 +44,7 @@ KONFIGURACJA_PARAMETROW = {
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
         dataset_id="cmems_mod_bal_phy_anfc_PT1H-i",
-        zmienna="slev"
+        domyslna_zmienna="zos"
     )
 }
 
@@ -52,6 +52,23 @@ KONFIGURACJA_PARAMETROW = {
 def usun_polskie_znaki(tekst: str) -> str:
     nfkd_form = unicodedata.normalize('NFKD', tekst)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+
+
+def znajdz_wlasciwa_zmienne(ds, preferowana):
+    dostepne = list(ds.data_vars.keys())
+    if preferowana in dostepne:
+        return preferowana
+
+    # Inteligentne szukanie zamienników dla poziomu wody
+    for var in dostepne:
+        v_lower = var.lower()
+        if preferowana == "zos" and any(k in v_lower for k in ["zos", "slev", "sea_surface_height", "level", "height"]):
+            return var
+        if preferowana == "so" and any(k in v_lower for k in ["so", "salinity", "salt"]):
+            return var
+
+    # Jeśli nie znajdzie pasującej, zwraca pierwszą lepszą numeryczną
+    return dostepne[0] if dostepne else preferowana
 
 
 @st.cache_data(ttl=3600)
@@ -73,11 +90,8 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        if konf.zmienna not in ds.data_vars:
-            st.error(f"Zmienna '{konf.zmienna}' nie została znaleziona w zbiorze {konf.dataset_id}.")
-            return None, None, "blad", None, None, None
+        zmienna_docelowa = znajdz_wlasciwa_zmienne(ds, konf.domyslna_zmienna)
 
-        # Bezpieczne cięcie przestrzenne i czasowe bez używania ciężkiego to_dataframe() na całości
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         ds_time = ds.sel(time=dzisiaj, method='nearest')
 
@@ -86,7 +100,7 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
         else:
             lat_slice = slice(lat_min, lat_max)
 
-        data_sub = ds_time[konf.zmienna].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
+        data_sub = ds_time[zmienna_docelowa].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
         try:
             data_sub = data_sub.isel(depth=0)
@@ -97,13 +111,12 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
         lons = data_sub.longitude.values
         vals = data_sub.values
 
-        # Tworzenie lekkiej tabeli bezpośrednio z tablic numpy (zero przeciążeń pamięci)
         rows = []
         for i, lat in enumerate(lats):
             for j, lon in enumerate(lons):
                 v = vals[i, j] if vals.ndim == 2 else vals.item()
                 if not np.isnan(v):
-                    rows.append({'latitude': lat, 'longitude': lon, konf.zmienna: v})
+                    rows.append({'latitude': lat, 'longitude': lon, 'wartosc_zmiennej': v})
 
         df_grid_raw = pd.DataFrame(rows)
         if df_grid_raw.empty:
@@ -121,11 +134,11 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
 
         for index, row in df_do_mapy.iterrows():
             siatka_gradientu.append({
-                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row[konf.zmienna]
+                "lat": row['latitude'], "lon": row['longitude'], "wartosc": row['wartosc_zmiennej']
             })
 
         data_odczytu = str(ds_time.time.values)[:16].replace("T", " ")
-        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, konf.zmienna
+        return siatka_gradientu, data_odczytu, status_maski, zalew_gdf, df_do_mapy, 'wartosc_zmiennej'
     except Exception as e:
         st.error(f"Błąd pobierania danych z Copernicusa: {e}")
         return None, None, "blad", None, None, None
@@ -145,8 +158,7 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        if konf.zmienna not in ds.data_vars:
-            return None
+        zmienna_docelowa = znajdz_wlasciwa_zmienne(ds, konf.domyslna_zmienna)
 
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
@@ -160,13 +172,12 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         else:
             lat_slice = slice(lat_min, lat_max)
 
-        sub_ds = ostatnie_30[konf.zmienna].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
+        sub_ds = ostatnie_30[zmienna_docelowa].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
         try:
             sub_ds = sub_ds.isel(depth=0)
         except Exception:
             pass
 
-        # Szybka agregacja średniej w czasie bez ciężkich ramek danych
         mean_series = sub_ds.mean(dim=['latitude', 'longitude'], skipna=True)
         times = mean_series.time.values
         values = mean_series.values
@@ -223,7 +234,7 @@ def renderuj_modul_zasolenia():
         if status_maski == "zaladowana":
             minx, miny, maxx, maxy = zalew_gdf.total_bounds
         else:
-            minx, miny, maxx, maxy = lons.min(), lats.min(), lons.max(), lons.max()
+            minx, miny, maxx, maxy = lons.min(), lats.min(), lons.max(), lats.max()
 
         grid_lon, grid_lat = np.meshgrid(
             np.linspace(minx - 0.02, maxx + 0.02, 500),
@@ -351,11 +362,11 @@ def renderuj_modul_zasolenia():
     st.subheader("📊 Tabela danych przestrzennych (Eksport Excel)")
 
     if aktywna_zmienna is not None:
-        df_eksport = df_piksle[['latitude', 'longitude', aktywna_zmienna]].copy()
+        df_eksport = df_piksle[['latitude', 'longitude', 'wartosc_zmiennej']].copy()
         df_eksport.rename(columns={
             'latitude': 'Szerokosc Geograficzna',
             'longitude': 'Dlugosc Geograficzna',
-            aktywna_zmienna: f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
+            'wartosc_zmiennej': f"{usun_polskie_znaki(krotka_nazwa)} ({konf.jednostka})"
         }, inplace=True)
         df_eksport.reset_index(drop=True, inplace=True)
 
