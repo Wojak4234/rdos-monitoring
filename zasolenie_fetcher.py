@@ -128,10 +128,8 @@ def pobierz_dane_gee_dem():
 
     try:
         roi = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
-        # Rozwiązanie błędu GEE: używamy ImageCollection i łączymy kafelki funkcją mosaic() przed wycięciem
         dem = ee.ImageCollection("COPERNICUS/DEM/GLO30").select('DEM').mosaic().clip(roi)
 
-        # Pobieramy próbkę terenu do lokalnej analizy
         punkty_ee = dem.sample(
             region=roi,
             scale=800,
@@ -184,12 +182,14 @@ def renderuj_modul_zasolenia():
 
         vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
         val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
-        st.success(f"✅ Poligon wczytany. Zaktualizowano model CMEMS na dzień: {data_modelu}")
+
+        aktualnosc_tekst = f"**{data_modelu}** (Dynamiczny model hydrodynamiczny, codzienna aktualizacja)"
+        st.success("✅ Poligon wczytany i przeliczony pomyślnie.")
 
     else:
         with st.spinner("Odpytywanie Google Earth Engine (Copernicus DEM)..."):
             siatka_gradientu, status_maski, zalew_gdf, df_piksle = pobierz_dane_gee_dem()
-            data_modelu = datetime.date.today().isoformat()
+            data_modelu = "2011-2015"
 
         if not siatka_gradientu:
             st.warning("Nie udało się pobrać danych wysokościowych z Google Earth Engine.")
@@ -197,7 +197,12 @@ def renderuj_modul_zasolenia():
 
         vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
         val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
-        st.success("✅ Pobieranie z GEE zakończone pomyślnie. Wygenerowano model wysokościowy terenu.")
+
+        aktualnosc_tekst = f"**Okres bazowy {data_modelu}** (Copernicus GLO-30. Statyczny model ukształtowania terenu)"
+        st.success("✅ Pobieranie z GEE zakończone pomyślnie. Wygenerowano model wysokościowy.")
+
+    # Wyświetlenie wyrazistego komunikatu o aktualności danych przed mapą
+    st.info(f"📅 **Stan i aktualność danych na mapie:** {aktualnosc_tekst}")
 
     # --- KARTY KPI ---
     c1, c2, c3 = st.columns(3)
@@ -336,7 +341,7 @@ def renderuj_modul_zasolenia():
     else:
         st.markdown("---")
         st.info(
-            "💡 **Analiza Terenowa:** Wartości bliskie `0 m n.p.m.` (niebieskie i ciemnozielone na legendzie) w połączeniu z danymi hydrograficznymi wskazują strefy mokradeł, płycizn i potencjalnie zalanego terenu. Wykorzystaj dymki na mapie do oceny dokładnej rzędnej na trasie planowanej inspekcji terenowej.")
+            "💡 **Analiza Terenowa (Przejezdność):** Wartości bliskie `0 m n.p.m.` (niebieskie i ciemnozielone na legendzie) wskazują strefy mokradeł, płycizn i potencjalnie zalanego terenu. Wykorzystaj dymki na mapie do oceny dokładnej rzędnej na trasie planowanej inspekcji terenowej. Model ten obrazuje wysokość samego gruntu pod wodą i brzegów.")
 
     # --- EKSPORT SIATKI ---
     st.markdown("---")
