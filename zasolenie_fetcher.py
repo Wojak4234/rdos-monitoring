@@ -241,9 +241,9 @@ def renderuj_modul_zasolenia():
             pts = np.vstack((grid_lon.flatten(), grid_lat.flatten())).T
             mask = np.zeros(pts.shape[0], dtype=bool)
             for geom in zalew_gdf.geometry:
-                if geom.type == 'Polygon':
+                if geom.geom_type == 'Polygon':
                     mask = mask | Path(np.asarray(geom.exterior.coords)).contains_points(pts)
-                elif geom.type == 'MultiPolygon':
+                elif geom.geom_type == 'MultiPolygon':
                     for poly in geom.geoms:
                         mask = mask | Path(np.asarray(poly.exterior.coords)).contains_points(pts)
             grid_vals.flat[~mask] = np.nan
@@ -358,7 +358,7 @@ def renderuj_modul_zasolenia():
 
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.dataframe(df_eksport, use_container_width=True)
+            st.dataframe(df_eksport, width='stretch')
 
         with col2:
             st.markdown("<br>", unsafe_allow_html=True)
