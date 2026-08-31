@@ -89,90 +89,98 @@ if init_gee():
         # ---------------- MODUŁ 1: NATURA 2000 ----------------
         if modul == "Obszary Natura 2000 (Wskaźniki)":
             typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
-            active_data = data_plb if "PLB" in typ else data_plh
 
-            names = [
-                f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
-                for f in active_data["features"]
-            ]
-            wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))))
+            # Pełne rozdzielenie bazy danych w zależności od wyboru
+            if "PLB" in typ:
+                active_data = data_plb
+            else:
+                active_data = data_plh
 
-            if "last_wybrany" not in st.session_state or st.session_state["last_wybrany"] != wybrany:
-                st.session_state["last_wybrany"] = wybrany
-                st.session_state["df_ts"] = None
+            if active_data and "features" in active_data:
+                names = [
+                    f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
+                    for f in active_data["features"]
+                ]
+                wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))))
 
-            feat = next(
-                f for f in active_data["features"]
-                if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany
-            )
-            geom = shape(feat["geometry"])
+                if "last_wybrany" not in st.session_state or st.session_state["last_wybrany"] != wybrany:
+                    st.session_state["last_wybrany"] = wybrany
+                    st.session_state["df_ts"] = None
 
-            m = folium.Map(location=[geom.centroid.y, geom.centroid.x], zoom_start=11)
-            kolor = 'blue' if "PLB" in typ else 'green'
-            folium.GeoJson(
-                feat,
-                style_function=lambda x: {'color': kolor, 'fillOpacity': 0.3, 'weight': 3}
-            ).add_to(m)
+                feat = next(
+                    f for f in active_data["features"]
+                    if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany
+                )
+                geom = shape(feat["geometry"])
 
-            st.sidebar.success(f"Wybrano: {wybrany}")
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("📈 Wybór wskaźnika satelitarnego")
-            selected_index = st.sidebar.selectbox(
-                "Wskaźnik:",
-                ("NDVI (Wegetacja)", "NDWI (Woda / Mokradła)", "NDMI (Wilgotność roślin)")
-            )
+                m = folium.Map(location=[geom.centroid.y, geom.centroid.x], zoom_start=11)
+                kolor = 'blue' if "PLB" in typ else 'green'
+                folium.GeoJson(
+                    feat,
+                    style_function=lambda x: {'color': kolor, 'fillOpacity': 0.3, 'weight': 3}
+                ).add_to(m)
 
-            start_date = st.sidebar.date_input("Data początkowa", value=pd.to_datetime("2025-01-01"))
-            end_date = st.sidebar.date_input("Data końcowa", value=pd.to_datetime("2026-08-19"))
+                st.sidebar.success(f"Wybrano: {wybrany}")
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("📈 Wybór wskaźnika satelitarnego")
+                selected_index = st.sidebar.selectbox(
+                    "Wskaźnik:",
+                    ("NDVI (Wegetacja)", "NDWI (Woda / Mokradła)", "NDMI (Wilgotność roślin)")
+                )
 
-            if st.sidebar.button("Generuj wykres wskaźnika"):
-                with st.spinner(f"Pobieranie szeregu czasowego ({selected_index}) ze Sentinel-2..."):
-                    df_res = calculate_index_time_series(feat, selected_index, start_date, end_date)
-                    if df_res is not None:
-                        df_res = df_res[df_res.index <= pd.Timestamp.now()]
-                    st.session_state["df_ts"] = df_res
+                start_date = st.sidebar.date_input("Data początkowa", value=pd.to_datetime("2025-01-01"))
+                end_date = st.sidebar.date_input("Data końcowa", value=pd.to_datetime("2026-08-19"))
 
-            if st.session_state.get("df_ts") is not None and not st.session_state["df_ts"].empty:
-                st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
-                st.line_chart(st.session_state["df_ts"])
+                if st.sidebar.button("Generuj wykres wskaźnika"):
+                    with st.spinner(f"Pobieranie szeregu czasowego ({selected_index}) ze Sentinel-2..."):
+                        df_res = calculate_index_time_series(feat, selected_index, start_date, end_date)
+                        if df_res is not None:
+                            df_res = df_res[df_res.index <= pd.Timestamp.now()]
+                        st.session_state["df_ts"] = df_res
 
-                info_n2k = get_parameter_info(selected_index)
-                with st.expander("ℹ️ Interpretacja wskaźnika (Wartości dodatnie/ujemne)"):
-                    st.markdown(f"**Opis:** {info_n2k['opis']}")
-                    st.markdown(f"**Zakresy i wartości:**\n{info_n2k['normy']}")
+                if st.session_state.get("df_ts") is not None and not st.session_state["df_ts"].empty:
+                    st.subheader(f"Dynamika wskaźnika {selected_index} dla: {wybrany}")
+                    st.line_chart(st.session_state["df_ts"])
 
-                col_csv, col_pdf = st.columns(2)
-                with col_csv:
-                    csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
-                    st.download_button(
-                        label="📥 Pobierz dane do CSV",
-                        data=csv_data,
-                        file_name=f"analiza_{selected_index.split()[0]}_{wybrany}.csv",
-                        mime="text/csv",
-                    )
-                with col_pdf:
-                    pdf_bytes = generate_general_pdf_report(
-                        title=f"Analiza Wskaznika - {selected_index}",
-                        subtitle=f"Obszar Natura 2000: {wybrany} ({typ})",
-                        df_data=st.session_state["df_ts"],
-                        details_dict={
-                            "Wskaznik": selected_index,
-                            "Okres": f"{start_date} do {end_date}",
-                            "Opis merytoryczny": info_n2k.get("opis", ""),
-                            "Interpretacja": info_n2k.get("normy", "")
-                        },
-                        lat=geom.centroid.y, lon=geom.centroid.x, station_name=wybrany
-                    )
-                    st.download_button(
-                        label="📥 Pobierz oficjalny raport PDF",
-                        data=pdf_bytes,
-                        file_name=f"raport_{selected_index.split()[0]}_{wybrany}.pdf",
-                        mime="application/pdf"
-                    )
-            elif st.session_state.get("df_ts") is not None and st.session_state["df_ts"].empty:
-                st.warning("Brak danych satelitarnych w wybranym przedziale. Spróbuj rozszerzyć zakres dat.")
+                    info_n2k = get_parameter_info(selected_index)
+                    with st.expander("ℹ️ Interpretacja wskaźnika (Wartości dodatnie/ujemne)"):
+                        st.markdown(f"**Opis:** {info_n2k['opis']}")
+                        st.markdown(f"**Zakresy i wartości:**\n{info_n2k['normy']}")
 
-            st_folium(m, width=1100, height=500, returned_objects=[])
+                    col_csv, col_pdf = st.columns(2)
+                    with col_csv:
+                        csv_data = st.session_state["df_ts"].to_csv().encode('utf-8')
+                        st.download_button(
+                            label="📥 Pobierz dane do CSV",
+                            data=csv_data,
+                            file_name=f"analiza_{selected_index.split()[0]}_{wybrany}.csv",
+                            mime="text/csv",
+                        )
+                    with col_pdf:
+                        pdf_bytes = generate_general_pdf_report(
+                            title=f"Analiza Wskaznika - {selected_index}",
+                            subtitle=f"Obszar Natura 2000: {wybrany} ({typ})",
+                            df_data=st.session_state["df_ts"],
+                            details_dict={
+                                "Wskaznik": selected_index,
+                                "Okres": f"{start_date} do {end_date}",
+                                "Opis merytoryczny": info_n2k.get("opis", ""),
+                                "Interpretacja": info_n2k.get("normy", "")
+                            },
+                            lat=geom.centroid.y, lon=geom.centroid.x, station_name=wybrany
+                        )
+                        st.download_button(
+                            label="📥 Pobierz oficjalny raport PDF",
+                            data=pdf_bytes,
+                            file_name=f"raport_{selected_index.split()[0]}_{wybrany}.pdf",
+                            mime="application/pdf"
+                        )
+                elif st.session_state.get("df_ts") is not None and st.session_state["df_ts"].empty:
+                    st.warning("Brak danych satelitarnych w wybranym przedziale. Spróbuj rozszerzyć zakres dat.")
+
+                st_folium(m, width=1100, height=500, returned_objects=[])
+            else:
+                st.error(f"Nie udało się wczytać danych dla wybranej kategorii ({typ}).")
 
         # ---------------- MODUŁ 2: POWIETRZE S5P ----------------
         elif modul == "Zanieczyszczenie powietrza (S5P)":
@@ -505,123 +513,131 @@ if init_gee():
         elif modul == "Zasolenie (Zalew Szczeciński)":
             renderuj_modul_zasolenia()
 
-        # ---------------- MODUŁ 6: DANE WEKTOROWE (OSM) ----------------
+            # ---------------- MODUŁ 6: DANE WEKTOROWE (OSM) ----------------
         elif modul == "Dane wektorowe (OSM)":
             st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
             typ_osm = st.radio("Z jakiej bazy wybieramy obszar?", ("PLB (Ptaki)", "PLH (Siedliska)"))
-            active_data_osm = data_plb if "PLB" in typ_osm else data_plh
 
-            names_osm = [
-                f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
-                for f in active_data_osm["features"]
-            ]
-            wybrany_osm = st.selectbox("Wybierz obszar Natura 2000:", sorted(list(set(names_osm))))
-            feat_osm = next(
-                f for f in active_data_osm["features"]
-                if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany_osm
-            )
+            # Pełne rozdzielenie plików GeoJSON
+            if "PLB" in typ_osm:
+                active_data_osm = data_plb
+            else:
+                active_data_osm = data_plh
 
-            col1, col2 = st.columns(2)
-            with col1:
-                promien = st.slider("Rozmiar bufora (m):", min_value=1000, max_value=20000, value=5000, step=1000)
-            with col2:
-                kategoria_osm = st.selectbox(
-                    "Kategoria:",
-                    ("Pomniki przyrody", "Rezerwaty przyrody", "Użytki ekologiczne",
-                     "Przejścia dla zwierząt (ekodukty)")
+            if active_data_osm and "features" in active_data_osm:
+                names_osm = [
+                    f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
+                    for f in active_data_osm["features"]
+                ]
+                wybrany_osm = st.selectbox("Wybierz obszar Natura 2000:", sorted(list(set(names_osm))))
+                feat_osm = next(
+                    f for f in active_data_osm["features"]
+                    if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany_osm
                 )
 
-            if st.button("Generuj strefę buforową i wyszukaj"):
-                with st.spinner("Przetwarzanie geometryczne i zapytanie OSM..."):
-                    try:
-                        geom_osm = shape(feat_osm["geometry"])
-                        project_to_2180 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2180",
-                                                                      always_xy=True).transform
-                        project_to_4326 = pyproj.Transformer.from_crs("EPSG:2180", "EPSG:4326",
-                                                                      always_xy=True).transform
+                col1, col2 = st.columns(2)
+                with col1:
+                    promien = st.slider("Rozmiar bufora (m):", min_value=1000, max_value=20000, value=5000, step=1000)
+                with col2:
+                    kategoria_osm = st.selectbox(
+                        "Kategoria:",
+                        ("Pomniki przyrody", "Rezerwaty przyrody", "Użytki ekologiczne",
+                         "Przejścia dla zwierząt (ekodukty)")
+                    )
 
-                        geom_2180 = transform(project_to_2180, geom_osm)
-                        buffered_2180 = geom_2180.buffer(promien)
-                        buffered_4326 = transform(project_to_4326, buffered_2180)
+                if st.button("Generuj strefę buforową i wyszukaj"):
+                    with st.spinner("Przetwarzanie geometryczne i zapytanie OSM..."):
+                        try:
+                            geom_osm = shape(feat_osm["geometry"])
+                            project_to_2180 = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2180",
+                                                                          always_xy=True).transform
+                            project_to_4326 = pyproj.Transformer.from_crs("EPSG:2180", "EPSG:4326",
+                                                                          always_xy=True).transform
 
-                        min_lon, min_lat, max_lon, max_lat = buffered_4326.bounds
-                        osm_results = get_osm_data_bbox(min_lat, min_lon, max_lon, max_lat, kategoria_osm)
-                        elements = osm_results.get("elements", [])
+                            geom_2180 = transform(project_to_2180, geom_osm)
+                            buffered_2180 = geom_2180.buffer(promien)
+                            buffered_4326 = transform(project_to_4326, buffered_2180)
 
-                        filtered_elements = []
-                        for el in elements:
-                            geom_osm_el = None
-                            if el["type"] == "node":
-                                geom_osm_el = Point(el["lon"], el["lat"])
-                            elif el["type"] in ["way", "relation"] and "geometry" in el:
-                                coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
-                                if len(coords) >= 2:
-                                    geom_osm_el = LineString(coords)
+                            min_lon, min_lat, max_lon, max_lat = buffered_4326.bounds
+                            osm_results = get_osm_data_bbox(min_lat, min_lon, max_lon, max_lat, kategoria_osm)
+                            elements = osm_results.get("elements", [])
 
-                            if geom_osm_el and buffered_4326.intersects(geom_osm_el):
-                                filtered_elements.append(el)
-
-                        m_osm = folium.Map(location=[geom_osm.centroid.y, geom_osm.centroid.x], zoom_start=10)
-                        folium.GeoJson(feat_osm, style_function=lambda x: {'color': 'black', 'fillOpacity': 0.4,
-                                                                           'weight': 2}).add_to(m_osm)
-                        folium.GeoJson(mapping(buffered_4326),
-                                       style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1, 'weight': 2,
-                                                                 'dashArray': '5, 5'}).add_to(m_osm)
-
-                        if filtered_elements:
-                            for el in filtered_elements:
-                                name = el.get("tags", {}).get("name", "Brak nazwy")
+                            filtered_elements = []
+                            for el in elements:
+                                geom_osm_el = None
                                 if el["type"] == "node":
-                                    folium.Marker([el["lat"], el["lon"]], tooltip=name,
-                                                  icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
+                                    geom_osm_el = Point(el["lon"], el["lat"])
                                 elif el["type"] in ["way", "relation"] and "geometry" in el:
-                                    coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
-                                    folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
-                                        m_osm)
-                            st.success(f"Znaleziono obiektów: {len(filtered_elements)}")
-                        else:
-                            st.warning("Brak obiektów w strefie buforowej.")
+                                    coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
+                                    if len(coords) >= 2:
+                                        geom_osm_el = LineString(coords)
 
-                        st_folium(m_osm, width=1100, height=600, returned_objects=[])
+                                if geom_osm_el and buffered_4326.intersects(geom_osm_el):
+                                    filtered_elements.append(el)
 
-                        if filtered_elements:
-                            osm_results["elements"] = filtered_elements
-                            json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
+                            m_osm = folium.Map(location=[geom_osm.centroid.y, geom_osm.centroid.x], zoom_start=10)
+                            folium.GeoJson(feat_osm, style_function=lambda x: {'color': 'black', 'fillOpacity': 0.4,
+                                                                               'weight': 2}).add_to(m_osm)
+                            folium.GeoJson(mapping(buffered_4326),
+                                           style_function=lambda x: {'color': 'blue', 'fillOpacity': 0.1, 'weight': 2,
+                                                                     'dashArray': '5, 5'}).add_to(m_osm)
 
-                            osm_rows = []
-                            for el in filtered_elements:
-                                osm_rows.append({
-                                    "Typ elementu": el["type"],
-                                    "ID": el.get("id"),
-                                    "Nazwa": el.get("tags", {}).get("name", "Brak nazwy")
-                                })
-                            df_osm_summary = pd.DataFrame(osm_rows)
+                            if filtered_elements:
+                                for el in filtered_elements:
+                                    name = el.get("tags", {}).get("name", "Brak nazwy")
+                                    if el["type"] == "node":
+                                        folium.Marker([el["lat"], el["lon"]], tooltip=name,
+                                                      icon=folium.Icon(color="green", icon="leaf")).add_to(m_osm)
+                                    elif el["type"] in ["way", "relation"] and "geometry" in el:
+                                        coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+                                        folium.Polygon(locations=coords, color="green", fill=True, tooltip=name).add_to(
+                                            m_osm)
+                                st.success(f"Znaleziono obiektów: {len(filtered_elements)}")
+                            else:
+                                st.warning("Brak obiektów w strefie buforowej.")
 
-                            col_json, col_pdf = st.columns(2)
-                            with col_json:
-                                st.download_button(
-                                    label="📥 Pobierz znalezione wektory jako JSON",
-                                    data=json_string.encode('utf-8'),
-                                    file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
-                                    mime="application/json"
-                                )
-                            with col_pdf:
-                                pdf_bytes = generate_general_pdf_report(
-                                    title="Raport Obiektow Wektorowych (OpenStreetMap)",
-                                    subtitle=f"Obszar Natura 2000: {wybrany_osm} | Kategoria: {kategoria_osm}",
-                                    df_data=df_osm_summary,
-                                    details_dict={"Bufor": f"{promien} metrów",
-                                                  "Liczba znalezionych obiektow": len(filtered_elements)},
-                                    lat=geom_osm.centroid.y, lon=geom_osm.centroid.x, station_name=wybrany_osm
-                                )
-                                st.download_button(
-                                    label="📥 Pobierz oficjalny raport PDF",
-                                    data=pdf_bytes,
-                                    file_name=f"raport_osm_{kategoria_osm.replace(' ', '_')}.pdf",
-                                    mime="application/pdf"
-                                )
-                    except Exception as e:
-                        st.error(f"Błąd: {e}")
+                            st_folium(m_osm, width=1100, height=600, returned_objects=[])
+
+                            if filtered_elements:
+                                osm_results["elements"] = filtered_elements
+                                json_string = json.dumps(osm_results, indent=2, ensure_ascii=False)
+
+                                osm_rows = []
+                                for el in filtered_elements:
+                                    osm_rows.append({
+                                        "Typ elementu": el["type"],
+                                        "ID": el.get("id"),
+                                        "Nazwa": el.get("tags", {}).get("name", "Brak nazwy")
+                                    })
+                                df_osm_summary = pd.DataFrame(osm_rows)
+
+                                col_json, col_pdf = st.columns(2)
+                                with col_json:
+                                    st.download_button(
+                                        label="📥 Pobierz znalezione wektory jako JSON",
+                                        data=json_string.encode('utf-8'),
+                                        file_name=f"osm_bufor_{kategoria_osm.replace(' ', '_')}.json",
+                                        mime="application/json"
+                                    )
+                                with col_pdf:
+                                    pdf_bytes = generate_general_pdf_report(
+                                        title="Raport Obiektow Wektorowych (OpenStreetMap)",
+                                        subtitle=f"Obszar Natura 2000: {wybrany_osm} | Kategoria: {kategoria_osm}",
+                                        df_data=df_osm_summary,
+                                        details_dict={"Bufor": f"{promien} metrów",
+                                                      "Liczba znalezionych obiektow": len(filtered_elements)},
+                                        lat=geom_osm.centroid.y, lon=geom_osm.centroid.x, station_name=wybrany_osm
+                                    )
+                                    st.download_button(
+                                        label="📥 Pobierz oficjalny raport PDF",
+                                        data=pdf_bytes,
+                                        file_name=f"raport_osm_{kategoria_osm.replace(' ', '_')}.pdf",
+                                        mime="application/pdf"
+                                    )
+                        except Exception as e:
+                            st.error(f"Błąd: {e}")
+            else:
+                st.error("Nie wczytano poprawnie pliku GeoJSON dla tej kategorii.")
 
         # ---------------- MODUŁ 7: SZYBKA INSPEKCJA (ALERTY + MAPA) ----------------
         elif modul == "🚨 Szybka Inspekcja (Alerty)":
