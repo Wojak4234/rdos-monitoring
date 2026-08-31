@@ -16,7 +16,7 @@ from matplotlib.path import Path
 from branca.element import Template, MacroElement
 
 
-# Klasa konfiguracyjna
+# Klasa konfiguracyjna chroniąca przed błędami lintera
 class ParamConfig:
     def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, zmienna: str):
         self.nazwa = nazwa
@@ -34,7 +34,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model 3D Bałtyku (średnia dobowa)
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model 3D Bałtyku
         zmienna="so"
     ),
     "zos": ParamConfig(
@@ -43,7 +43,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_bal_phy_anfc_PT1H-i",  # Model 2D Bałtyku (dane live godzinowe, "i" - instantaneous)
+        dataset_id="cmems_mod_bal_phy_anfc_PT1H-i",  # Model 2D Bałtyku (dane live godzinowe)
         zmienna="slev"
     )
 }
@@ -61,6 +61,8 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
     zalew_gdf = None
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
+    lat_min, lat_max = 53.40, 54.00
+    lon_min, lon_max = 14.15, 14.80
 
     try:
         user = st.secrets["copernicus"]["username"]
@@ -82,16 +84,16 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             elif "so" in dostepne_zmienne:
                 zmienna_docelowa = "so"
             else:
-                raise ValueError(f"Nie znaleziono odpowiedniej zmiennej w zbiorze. Dostępne: {dostepne_zmienne}")
+                raise ValueError(f"Brak zmiennej. Dostępne: {dostepne_zmienne}")
 
-        # Odrzucamy prognozy z przyszłości. Pobieramy stan historyczny/dzisiejszy
-        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
-        ostatni_czas = ds.sel(time=dzisiaj, method='nearest')
+        # ZABEZPIECZENIE 1: Zabezpieczony kierunek wycinania (niektóre modele mają współrzędne malejące)
+        if ds.latitude[0].values > ds.latitude[-1].values:
+            lat_slice = slice(lat_max, lat_min)
+        else:
+            lat_slice = slice(lat_min, lat_max)
 
-        bbox_ds = ostatni_czas[zmienna_docelowa].sel(
-            latitude=slice(53.40, 54.00),
-            longitude=slice(14.15, 14.80)
-        )
+        # ZABEZPIECZENIE 2: Przestrzenne cięcie NAJPIERW (eliminuje błąd "Oh no. Error running app" = OOM Kill)
+        bbox_ds = ds[zmienna_docelowa].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
         # Jeśli to zmienna 3D (Zasolenie), ucinamy wymiar głębokości do zera
         try:
@@ -99,7 +101,11 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
         except Exception:
             pass
 
-        df_grid_raw = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
+            # Odrzucamy prognozy z przyszłości
+        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
+        ostatni_czas = bbox_ds.sel(time=dzisiaj, method='nearest')
+
+        df_grid_raw = ostatni_czas.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -126,6 +132,9 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
 @st.cache_data(ttl=86400)
 def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
     konf = KONFIGURACJA_PARAMETROW[parametr]
+    lat_min, lat_max = 53.40, 54.00
+    lon_min, lon_max = 14.15, 14.80
+
     try:
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
@@ -144,24 +153,30 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             elif "so" in dostepne_zmienne:
                 zmienna_docelowa = "so"
 
-        # Filtrujemy dane do dzisiejszej daty (odcinamy prognozy)
-        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
-        trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
+        # Zabezpieczony kierunek osi i docięcie przestrzenne NAJPIERW (aby historia nie ubiła RAM-u)
+        if ds.latitude[0].values > ds.latitude[-1].values:
+            lat_slice = slice(lat_max, lat_min)
+        else:
+            lat_slice = slice(lat_min, lat_max)
 
-        ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
-
-        # Oszczędzamy pamięć - z modelu godzinowego bierzemy próbkę co 24h na potrzeby trendu
-        if "PT1H" in konf.dataset_id:
-            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
-
-        bbox_ds = ostatnie_30[zmienna_docelowa].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
+        bbox_ds = ds[zmienna_docelowa].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
             pass
 
-        df = bbox_ds.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
+        # Filtrujemy dane do dzisiejszej daty (odcinamy prognozy)
+        dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
+        trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
+
+        ostatnie_30 = bbox_ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
+
+        # Oszczędzamy pamięć - z modelu godzinowego bierzemy próbkę co 24h na potrzeby trendu
+        if "PT1H" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
+
+        df = ostatnie_30.to_dataframe().reset_index().dropna(subset=[zmienna_docelowa])
 
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
@@ -199,8 +214,7 @@ def renderuj_modul_zasolenia():
             parametr)
 
     if not siatka_gradientu:
-        st.warning(
-            "Upewnij się, że st.secrets zawiera poprawne poświadczenia OPeNDAP dla Copernicusa i model istnieje.")
+        st.warning("Pobieranie przerwane. Sprawdź, czy model istnieje na serwerach Copernicusa.")
         return
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
@@ -217,9 +231,9 @@ def renderuj_modul_zasolenia():
 
     # --- MAPA INTERAKTYWNA ---
     st.subheader(f"🗺️ Bieżąca mapa przestrzenna: {konf.nazwa}")
-    m_zas = folium.Map(location=(53.75, 14.45), zoom_start=10, tiles="OpenStreetMap")
+    m_zas = folium.Map(location=[53.75, 14.45], zoom_start=10, tiles="OpenStreetMap")
 
-    if siatka_gradientu:
+    if len(siatka_gradientu) > 3:
         lats = np.array([p["lat"] for p in siatka_gradientu])
         lons = np.array([p["lon"] for p in siatka_gradientu])
 
@@ -233,7 +247,15 @@ def renderuj_modul_zasolenia():
             np.linspace(miny - 0.02, maxy + 0.02, 500)
         )
 
-        grid_vals_smooth = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='cubic')
+        # ZABEZPIECZENIE 3: Zapobieganie C-level Segfault z biblioteki Qhull
+        lats_jitter = lats + np.random.normal(0, 1e-6, size=lats.shape)
+        lons_jitter = lons + np.random.normal(0, 1e-6, size=lons.shape)
+
+        try:
+            grid_vals_smooth = griddata((lons_jitter, lats_jitter), vals_array, (grid_lon, grid_lat), method='linear')
+        except Exception:
+            grid_vals_smooth = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
+
         grid_vals_near = griddata((lons, lats), vals_array, (grid_lon, grid_lat), method='nearest')
         grid_vals = np.where(np.isnan(grid_vals_smooth), grid_vals_near, grid_vals_smooth)
 
@@ -248,7 +270,9 @@ def renderuj_modul_zasolenia():
                         mask = mask | Path(np.asarray(poly.exterior.coords)).contains_points(pts)
             grid_vals.flat[~mask] = np.nan
 
-        fig, ax = plt.subplots(figsize=(10, 10))
+        # Bezpieczne renderowanie Matplotlib by uniknąć wyrzucania całego wątku aplikacji
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111)
         ax.axis('off')
         fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
@@ -256,9 +280,9 @@ def renderuj_modul_zasolenia():
 
         img_buf = io.BytesIO()
         plt.savefig(img_buf, format='png', transparent=True, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
         img_buf.seek(0)
         img_base64 = base64.b64encode(img_buf.read()).decode('utf-8')
-        plt.close(fig)
 
         img_bounds = [[miny - 0.02, minx - 0.02], [maxy + 0.02, maxx + 0.02]]
         folium.raster_layers.ImageOverlay(
@@ -271,13 +295,13 @@ def renderuj_modul_zasolenia():
         if df_piksle is not None and aktywna_zmienna is not None:
             for idx, row in df_piksle.iterrows():
                 folium.CircleMarker(
-                    location=(row['latitude'], row['longitude']),
+                    location=[row['latitude'], row['longitude']],
                     radius=12,
                     color='transparent',
                     fill=True,
                     fill_color='transparent',
                     fill_opacity=0,
-                    tooltip=f"Odczyt węzła z {data_modelu}: <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
+                    tooltip=f"Węzeł ({data_modelu}): <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
                 ).add_to(m_zas)
 
     if status_maski == "zaladowana":
