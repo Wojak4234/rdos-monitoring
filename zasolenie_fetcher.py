@@ -17,14 +17,16 @@ from branca.element import Template, MacroElement
 
 
 class ParamConfig:
-    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, zmienna: str):
+    def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, zmienna: str):
         self.nazwa = nazwa
         self.jednostka = jednostka
         self.cmap = cmap
         self.legend_colors = legend_colors
-        self.dataset_id = dataset_id
         self.zmienna = zmienna
 
+
+# Używamy jednego, w 100% stabilnego i istniejącego zbioru danych Bałtyku dla obu parametrów
+DATASET_ID = "cmems_mod_bal_phy_anfc_P1D-m"
 
 KONFIGURACJA_PARAMETROW = {
     "so": ParamConfig(
@@ -33,17 +35,15 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
         zmienna="so"
     ),
-    "zos": ParamConfig(
-        nazwa="Wysokość lustra wody (Bieżące wezbranie)",
-        jednostka="m",
-        cmap="coolwarm",
-        legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
-                       '#d73027'],
-        dataset_id="cmems_mod_bal_phy-ssh_anfc_PT1H-i",
-        zmienna="zos"
+    "thetao": ParamConfig(
+        nazwa="Temperatura wody (Stan termiczny)",
+        jednostka="°C",
+        cmap="YlOrRd",
+        legend_colors=['#ffffcc', '#ffeda0', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#bd0026',
+                       '#800026'],
+        zmienna="thetao"
     )
 }
 
@@ -66,11 +66,10 @@ def pobierz_stabilne_dane_copernicus(parametr: str = "so"):
         pwd = st.secrets["copernicus"]["password"]
 
         ds = copernicusmarine.open_dataset(
-            dataset_id=konf.dataset_id,
+            dataset_id=DATASET_ID,
             username=user, password=pwd
         )
 
-        # Bezpieczne wycięcie obszaru Zalewu bez ładowania całego morza
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         ds_time = ds.sel(time=dzisiaj, method='nearest')
 
@@ -128,7 +127,7 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         user = st.secrets["copernicus"]["username"]
         pwd = st.secrets["copernicus"]["password"]
         ds = copernicusmarine.open_dataset(
-            dataset_id=konf.dataset_id,
+            dataset_id=DATASET_ID,
             username=user, password=pwd
         )
 
@@ -136,9 +135,6 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
-        if "PT1H" in konf.dataset_id:
-            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
-
         sub_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
         try:
             sub_ds = sub_ds.isel(depth=0)
@@ -155,22 +151,22 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
 
 
 def renderuj_modul_zasolenia():
-    st.header("🌊 Monitorowanie Hydrofizyczne (Modele CMEMS)")
+    st.header("🌊 Monitorowanie Hydrofizyczne (Model Bałtyku CMEMS)")
 
     wybrany_parametr_opcja = st.radio(
-        "Wybierz bieżący parametr do analizy:",
-        options=["Zasolenie wody", "Wysokość lustra wody (Podtopienia/Przejezdność)"],
+        "Wybierz parametr do analizy:",
+        options=["Zasolenie wody", "Temperatura wody (Termika)"],
         horizontal=True
     )
 
     if "Zasolenie" in wybrany_parametr_opcja:
         parametr = "so"
     else:
-        parametr = "zos"
+        parametr = "thetao"
 
     konf = KONFIGURACJA_PARAMETROW[parametr]
 
-    with st.spinner(f"Pobieranie stabilnych danych z serwera Copernicus ({konf.dataset_id})..."):
+    with st.spinner(f"Pobieranie stabilnych danych z serwera Copernicus ({DATASET_ID})..."):
         siatka_gradientu, data_modelu, status_maski, zalew_gdf, df_piksle, aktywna_zmienna = pobierz_stabilne_dane_copernicus(
             parametr)
 
@@ -185,9 +181,9 @@ def renderuj_modul_zasolenia():
     st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Minimalny wynik", f"{val_min:.3f} {konf.jednostka}")
-    c2.metric("Średni wynik", f"{val_mean:.3f} {konf.jednostka}")
-    c3.metric("Maksymalny wynik", f"{val_max:.3f} {konf.jednostka}")
+    c1.metric("Minimalny wynik", f"{val_min:.2f} {konf.jednostka}")
+    c2.metric("Średni wynik", f"{val_mean:.2f} {konf.jednostka}")
+    c3.metric("Maksymalny wynik", f"{val_max:.2f} {konf.jednostka}")
 
     st.subheader(f"🗺️ Mapa przestrzenna: {konf.nazwa}")
 
@@ -261,7 +257,7 @@ def renderuj_modul_zasolenia():
                         fill=True,
                         fill_color='transparent',
                         fill_opacity=0,
-                        tooltip=f"Węzeł: <br><b>{row[aktywna_zmienna]:.3f} {konf.jednostka}</b>"
+                        tooltip=f"Węzeł: <br><b>{row[aktywna_zmienna]:.2f} {konf.jednostka}</b>"
                     ).add_to(m_zas)
 
         if status_maski == "zaladowana":
@@ -301,11 +297,11 @@ def renderuj_modul_zasolenia():
                     ">
                 </div>
                 <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
-                    <span>{val_max:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
-                    <span>{val_min:.2f}</span>
+                    <span>{val_max:.1f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.75:.1f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.5:.1f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.25:.1f}</span>
+                    <span>{val_min:.1f}</span>
                 </div>
             </div>
         </div>
@@ -325,7 +321,7 @@ def renderuj_modul_zasolenia():
         with st.spinner("Pobieranie historii..."):
             szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
         if szereg_df is not None and not szereg_df.empty:
-            st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#d73027")
+            st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#e31a1c")
         else:
             st.info("Brak danych historycznych.")
     except Exception:
