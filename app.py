@@ -90,18 +90,17 @@ if init_gee():
         if modul == "Obszary Natura 2000 (Wskaźniki)":
             typ = st.sidebar.radio("Wybierz kategorię:", ("PLB (Ptaki)", "PLH (Siedliska)"))
 
-            # Pełne rozdzielenie bazy danych w zależności od wyboru
-            if "PLB" in typ:
-                active_data = data_plb
-            else:
-                active_data = data_plh
+            # Dynamiczny wybór pliku danych w zależności od zaznaczenia
+            active_data = data_plb if "PLB" in typ else data_plh
 
             if active_data and "features" in active_data:
                 names = [
                     f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
                     for f in active_data["features"]
                 ]
-                wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))))
+
+                # Dodanie klucza (key), który sprawia, że po zmianie opcji lista rozwijana resetuje się
+                wybrany = st.sidebar.selectbox("Wybierz obszar:", sorted(list(set(names))), key=f"select_n2k_{typ}")
 
                 if "last_wybrany" not in st.session_state or st.session_state["last_wybrany"] != wybrany:
                     st.session_state["last_wybrany"] = wybrany
@@ -513,23 +512,24 @@ if init_gee():
         elif modul == "Zasolenie (Zalew Szczeciński)":
             renderuj_modul_zasolenia()
 
-            # ---------------- MODUŁ 6: DANE WEKTOROWE (OSM) ----------------
+        # ---------------- MODUŁ 6: DANE WEKTOROWE (OSM) ----------------
         elif modul == "Dane wektorowe (OSM)":
             st.header("🗺️ Baza danych wektorowych - OpenStreetMap (Overpass API)")
             typ_osm = st.radio("Z jakiej bazy wybieramy obszar?", ("PLB (Ptaki)", "PLH (Siedliska)"))
 
-            # Pełne rozdzielenie plików GeoJSON
-            if "PLB" in typ_osm:
-                active_data_osm = data_plb
-            else:
-                active_data_osm = data_plh
+            # Dynamiczny wybór pliku danych w zależności od zaznaczenia
+            active_data_osm = data_plb if "PLB" in typ_osm else data_plh
 
             if active_data_osm and "features" in active_data_osm:
                 names_osm = [
                     f["properties"].get("nazwa") or f["properties"].get("SITE_NAME") or "Bez nazwy"
                     for f in active_data_osm["features"]
                 ]
-                wybrany_osm = st.selectbox("Wybierz obszar Natura 2000:", sorted(list(set(names_osm))))
+
+                # Dynamiczny klucz (key) do resetowania wyboru
+                wybrany_osm = st.selectbox("Wybierz obszar Natura 2000:", sorted(list(set(names_osm))),
+                                           key=f"select_osm_{typ_osm}")
+
                 feat_osm = next(
                     f for f in active_data_osm["features"]
                     if (f["properties"].get("nazwa") or f["properties"].get("SITE_NAME")) == wybrany_osm
