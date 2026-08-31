@@ -34,7 +34,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model regionalny Bałtyku (Zasolenie 3D)
+        dataset_id="cmems_mod_bal_phy_anfc_PT1H-m",  # Wysokorozdzielczy, godzinowy model Bałtyku
         zmienna="so"
     ),
     "zos": ParamConfig(
@@ -43,8 +43,8 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_glo_phy_anfc_0.083deg_P1D-m",  # Stabilny Model Globalny Gwarantujący zmienną 'zos' (SSH)
-        zmienna="zos"
+        dataset_id="cmems_mod_bal_phy_anfc_PT1H-m",  # Ten sam model Bałtyku
+        zmienna="slev"  # Prawidłowa nazwa zmiennej SSH dla Bałtyku (Sea Level)
     )
 }
 
@@ -71,7 +71,7 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             username=user, password=pwd
         )
 
-        # Odrzucamy prognozy z przyszłości. Pobieramy stan historyczny/dzisiejszy (ucinamy future-forecast)
+        # Odrzucamy prognozy z przyszłości. Pobieramy stan historyczny/dzisiejszy
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
         ds_past = ds.sel(time=slice(None, dzisiaj))
         ostatni_czas = ds_past.isel(time=-1)
@@ -81,8 +81,7 @@ def pobierz_rzeczywiste_dane(parametr: str = "so"):
             longitude=slice(14.15, 14.80)
         )
 
-        # Jeśli to model 3D (Zasolenie), ucinamy wymiar głębokości do warstwy wierzchniej.
-        # Zmienna zos (2D) zostanie zignorowana przez klauzulę except
+        # Jeśli to zmienna 3D (Zasolenie), ucinamy wymiar głębokości.
         try:
             bbox_ds = bbox_ds.isel(depth=0)
         except Exception:
@@ -128,6 +127,10 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
+
+        # Oszczędzamy pamięć i API - z modelu godzinowego bierzemy próbkę co 24h na potrzeby trendu
+        if "PT1H" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
 
         bbox_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
 
@@ -184,9 +187,9 @@ def renderuj_modul_zasolenia():
 
     # --- KARTY KPI ---
     c1, c2, c3 = st.columns(3)
-    c1.metric("Minimalny wynik", f"{val_min:.2f} {konf.jednostka}")
-    c2.metric("Średni wynik", f"{val_mean:.2f} {konf.jednostka}")
-    c3.metric("Maksymalny wynik", f"{val_max:.2f} {konf.jednostka}")
+    c1.metric("Minimalny wynik", f"{val_min:.3f} {konf.jednostka}")
+    c2.metric("Średni wynik", f"{val_mean:.3f} {konf.jednostka}")
+    c3.metric("Maksymalny wynik", f"{val_max:.3f} {konf.jednostka}")
 
     # --- MAPA INTERAKTYWNA ---
     st.subheader(f"🗺️ Bieżąca mapa przestrzenna: {konf.nazwa}")
@@ -309,7 +312,7 @@ def renderuj_modul_zasolenia():
 
     # --- HISTORIA ---
     st.markdown("---")
-    st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
+    st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni wstecz od dzisiaj)")
     with st.spinner("Pobieranie danych historycznych z CMEMS..."):
         szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
     if szereg_df is not None:
