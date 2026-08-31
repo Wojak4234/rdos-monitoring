@@ -2,7 +2,6 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import pandas as pd
-import datetime
 import os
 import unicodedata
 import io
@@ -17,7 +16,7 @@ from matplotlib.path import Path
 from branca.element import Template, MacroElement
 
 
-# Klasa konfiguracyjna, która eliminuje błędy typowania w IDE
+# Klasa konfiguracyjna
 class ParamConfig:
     def __init__(self, nazwa: str, jednostka: str, cmap: str, legend_colors: list, dataset_id: str, zmienna: str):
         self.nazwa = nazwa
@@ -35,7 +34,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="jet",
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model Bałtyku - 3D (Głębinowy)
+        dataset_id="cmems_mod_bal_phy_anfc_P1D-m",  # Model 3D (Zasolenie, Temperatura)
         zmienna="so"
     ),
     "zos": ParamConfig(
@@ -44,7 +43,7 @@ KONFIGURACJA_PARAMETROW = {
         cmap="coolwarm",
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
-        dataset_id="cmems_mod_bal_phy_anfc_P1D-s",  # Model Bałtyku - 2D (Powierzchniowy) - gwarantuje obecność 'zos'
+        dataset_id="cmems_mod_bal_phy-ssh_anfc_PT1H-i",  # Dedykowany model SSH (Sea Surface Height)
         zmienna="zos"
     )
 }
@@ -128,6 +127,10 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
+        # Optymalizacja dla modelu godzinowego: bierzemy jedną próbkę dziennie (skok co 24)
+        if "PT1H" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
+
         bbox_ds = ostatnie_30[konf.zmienna].sel(latitude=slice(53.40, 54.00), longitude=slice(14.15, 14.80))
 
         try:
@@ -179,13 +182,14 @@ def renderuj_modul_zasolenia():
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
     st.success("✅ Dane pobrane i przeliczone przestrzennie pomyślnie.")
 
-    st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC (System odrzuca prognozy i pokazuje czas pomiaru bieżącego)")
+    st.info(
+        f"📅 **Stan faktyczny na:** {data_modelu} UTC (System odrzuca prognozy i pobiera odczyt z najbliższej dostępnej godziny)")
 
     # --- KARTY KPI ---
     c1, c2, c3 = st.columns(3)
-    c1.metric("Minimalny wynik", f"{val_min:.2f} {konf.jednostka}")
-    c2.metric("Średni wynik", f"{val_mean:.2f} {konf.jednostka}")
-    c3.metric("Maksymalny wynik", f"{val_max:.2f} {konf.jednostka}")
+    c1.metric("Minimalny wynik", f"{val_min:.3f} {konf.jednostka}")
+    c2.metric("Średni wynik", f"{val_mean:.3f} {konf.jednostka}")
+    c3.metric("Maksymalny wynik", f"{val_max:.3f} {konf.jednostka}")
 
     # --- MAPA INTERAKTYWNA ---
     st.subheader(f"🗺️ Bieżąca mapa przestrzenna: {konf.nazwa}")
