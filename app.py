@@ -284,145 +284,151 @@ if init_gee():
 
         # ---------------- MODUŁ 3: STACJE GIOŚ ----------------
         elif modul == "Pomiary naziemne (GIOŚ)":
-            st.header("📍 Pomiary naziemne jakości powietrza (API GIOŚ / Copernicus)")
-            if "gios_stations" not in st.session_state:
-                st.session_state["gios_stations"] = []
-            if "df_hist" not in st.session_state:
+            st.header("📍 Interaktywny Monitoring Powietrza (Wirtualna Stacja)")
+            st.markdown(
+                "Kliknij w **dowolne miejsce na mapie**, aby wyznaczyć wirtualną stację i pobrać bieżące oraz historyczne (72h) parametry atmosferyczne dla tej lokalizacji.")
+
+            # Inicjalizacja domyślnego punktu w pamięci podręcznej
+            if "clicked_lat" not in st.session_state:
+                st.session_state["clicked_lat"] = 53.428
+                st.session_state["clicked_lon"] = 14.552
                 st.session_state["df_hist"] = None
+                st.session_state["curr_aqi"] = None
+                st.session_state["curr_time"] = None
 
-            if st.button("Pobierz / Odśwież dane na mapie"):
-                with st.spinner("Odpytuję serwery pomiarowe..."):
-                    try:
-                        stations = get_gios_stations()
-                        if stations:
-                            for s in stations:
-                                aqi, date = get_gios_aqi(s['id'], float(s['gegrLat']), float(s['gegrLon']))
-                                s['aqi_level'] = aqi
-                                s['calc_date'] = date
-                            st.session_state["gios_stations"] = stations
-                            st.success(f"Pobrano pomyślnie wskaźniki ogólne dla {len(stations)} lokalizacji.")
-                    except Exception as e:
-                        st.error(str(e))
+            lat = st.session_state["clicked_lat"]
+            lon = st.session_state["clicked_lon"]
 
-            stations_data = st.session_state.get("gios_stations", [])
-            if stations_data:
-                m_gios = folium.Map(location=[53.6, 15.6], zoom_start=8)
-                for s in stations_data:
-                    lat = float(s['gegrLat'])
-                    lon = float(s['gegrLon'])
-                    name = s['stationName']
-                    aqi_level = s['aqi_level']
-                    calc_date = s['calc_date']
+            # Generowanie mapy i pobieranie danych dla klikniętego punktu
+            if st.session_state["curr_aqi"] is None:
+                with st.spinner("Odpytuję serwery Copernicus dla wybranej lokalizacji..."):
+                    # id stacji nie ma już znaczenia, wrzucamy 0
+                    aqi, time_str = get_gios_aqi(0, lat, lon)
+                    st.session_state["curr_aqi"] = aqi
+                    st.session_state["curr_time"] = time_str
 
-                    color = "gray"
-                    if "Bardzo dobry" in aqi_level:
-                        color = "darkgreen"
-                    elif "Dobry" in aqi_level:
-                        color = "green"
-                    elif "Umiarkowany" in aqi_level:
-                        color = "orange"
-                    elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
-                        color = "lightred"
-                    elif "Bardzo zły" in aqi_level:
-                        color = "red"
+            aqi_level = st.session_state["curr_aqi"]
 
-                    popup_html = f"<b>{name}</b><br>Stan: <b>{aqi_level}</b><br>Czas: {calc_date}"
-                    folium.Marker(
-                        [lat, lon],
-                        popup=folium.Popup(popup_html, max_width=300),
-                        tooltip=name,
-                        icon=folium.Icon(color=color, icon="info-sign")
-                    ).add_to(m_gios)
+            # Dobór koloru znacznika
+            color = "gray"
+            if "Bardzo dobry" in aqi_level:
+                color = "darkgreen"
+            elif "Dobry" in aqi_level:
+                color = "green"
+            elif "Umiarkowany" in aqi_level:
+                color = "orange"
+            elif "Dostateczny" in aqi_level or "Zły" in aqi_level:
+                color = "lightred"
+            elif "Bardzo zły" in aqi_level:
+                color = "red"
 
-                st_folium(m_gios, width=1100, height=500, returned_objects=[])
+            m_gios = folium.Map(location=[53.6, 15.6], zoom_start=8)
 
-                st.markdown("---")
-                st.subheader("📊 Szczegółowe dane zanieczyszczeń i historia (Wykres / Tabela)")
-                station_dict = {s['stationName']: s for s in stations_data}
-                selected_station = st.selectbox("Wybierz stację z mapy:", list(station_dict.keys()))
+            popup_html = f"Współrzędne: {lat:.4f}, {lon:.4f}<br>Stan powietrza: <b>{aqi_level}</b><br>Odczyt: {st.session_state['curr_time']}"
+            folium.Marker(
+                [lat, lon],
+                popup=folium.Popup(popup_html, max_width=300),
+                tooltip="Wirtualna stacja pomiarowa",
+                icon=folium.Icon(color=color, icon="info-sign")
+            ).add_to(m_gios)
 
-                if st.button("Wygeneruj raport szczegółowy (ostatnie 72h)"):
-                    with st.spinner("Pobieram pełne dane historyczne..."):
-                        sel_s = station_dict[selected_station]
-                        df_raw = get_historical_air_quality(float(sel_s['gegrLat']), float(sel_s['gegrLon']),
-                                                            past_days=3)
-                        if df_raw is not None:
-                            df_raw = df_raw[df_raw.index <= pd.Timestamp.now()]
-                        st.session_state["df_hist"] = df_raw
+            # Przechwytujemy akcje użytkownika z mapy
+            map_data = st_folium(m_gios, width=1100, height=500)
 
-                df_hist = st.session_state.get("df_hist", None)
-                if df_hist is not None and not df_hist.empty:
-                    st.markdown(f"### Poziom zanieczyszczeń dla stacji: **{selected_station}**")
+            if map_data and map_data.get("last_clicked"):
+                new_lat = map_data["last_clicked"]["lat"]
+                new_lon = map_data["last_clicked"]["lng"]
+                # Jeśli użytkownik kliknął w inne miejsce, resetujemy dane i przeładowujemy aplikację
+                if new_lat != lat or new_lon != lon:
+                    st.session_state["clicked_lat"] = new_lat
+                    st.session_state["clicked_lon"] = new_lon
+                    st.session_state["df_hist"] = None
+                    st.session_state["curr_aqi"] = None
+                    st.session_state["curr_time"] = None
+                    st.rerun()
 
-                    dostepne_kolumny = df_hist.columns.tolist()
-                    wybrane_parametry = st.multiselect(
-                        "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
-                        options=dostepne_kolumny,
-                        default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
-                                 col in dostepne_kolumny],
-                        key="gios_param_select"
-                    )
+            st.markdown("---")
+            st.subheader(f"📊 Szczegółowe dane zanieczyszczeń (Wybrany punkt: {lat:.4f}, {lon:.4f})")
 
-                    if wybrane_parametry:
-                        df_filtered = df_hist[wybrane_parametry]
-                        df_filtered = df_filtered[df_filtered.index <= pd.Timestamp.now()]
-                        st.line_chart(df_filtered)
+            # Pobieranie historii dla nowego punktu
+            if st.session_state["df_hist"] is None:
+                with st.spinner("Pobieram pełne dane historyczne..."):
+                    df_raw = get_historical_air_quality(lat, lon, past_days=3)
+                    if df_raw is not None:
+                        df_raw = df_raw[df_raw.index <= pd.Timestamp.now()]
+                    st.session_state["df_hist"] = df_raw
 
-                        with st.expander("📖 Legenda i normy jakości powietrza (Standardy / WHO)"):
-                            st.markdown("""
-                            * **PM10**: Norma dobowa wynosi **50 µg/m³** (dopuszczalne 35 przekroczeń w roku). Norma roczna to **40 µg/m³**.
-                            * **PM2.5**: Norma roczna wynosi **20 µg/m³** (wytyczne WHO zalecają ostrzejszy poziom **5 µg/m³**).
-                            * **NO2 (Dwutlenek azotu)**: Średnia roczna norma to **40 µg/m³**, a średnia godzinowa **200 µg/m³**.
-                            * **SO2 (Dwutlenek siarki)**: Średnia dobowa norma to **125 µg/m³**, a godzinowa **350 µg/m³**.
-                            * **Ozon (O3)**: Poziom docelowy dla ochrony zdrowia (maksymalne średnie stężenie 8-godzinne): **120 µg/m³**.
-                            * **CO (Tlenek węgla)**: Maksymalne średnie stężenie 8-godzinne wynosi **10 mg/m³** (10000 µg/m³).
-                            """)
+            df_hist = st.session_state["df_hist"]
 
-                        st.markdown("#### Tabela wyników (Najnowsze na górze)")
-                        display_df = df_filtered.tail(24).iloc[::-1]
-                        display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
-                        st.dataframe(display_df, use_container_width=True)
+            if df_hist is not None and not df_hist.empty:
+                dostepne_kolumny = df_hist.columns.tolist()
+                wybrane_parametry = st.multiselect(
+                    "Zaznacz parametry do wyświetlenia na wykresie i w tabeli:",
+                    options=dostepne_kolumny,
+                    default=[col for col in ["PM10 (µg/m³)", "PM2.5 (µg/m³)", "NO2 (µg/m³)"] if
+                             col in dostepne_kolumny],
+                    key="gios_param_select"
+                )
 
-                        st.markdown("#### ⚙️ Ustawienia raportu PDF")
-                        min_d = df_filtered.index.min().date()
-                        max_d = min(df_filtered.index.max().date(), pd.Timestamp.today().date())
+                if wybrane_parametry:
+                    df_filtered = df_hist[wybrane_parametry]
+                    df_filtered = df_filtered[df_filtered.index <= pd.Timestamp.now()]
+                    st.line_chart(df_filtered)
 
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            rep_start = st.date_input("Od daty:", value=min_d, min_value=min_d, max_value=max_d)
-                        with c2:
-                            rep_end = st.date_input("Do daty:", value=max_d, min_value=min_d, max_value=max_d)
+                    with st.expander("📖 Legenda i normy jakości powietrza (Standardy / WHO)"):
+                        st.markdown("""
+                        * **PM10**: Norma dobowa wynosi **50 µg/m³** (dopuszczalne 35 przekroczeń w roku). Norma roczna to **40 µg/m³**.
+                        * **PM2.5**: Norma roczna wynosi **20 µg/m³** (wytyczne WHO zalecają ostrzejszy poziom **5 µg/m³**).
+                        * **NO2 (Dwutlenek azotu)**: Średnia roczna norma to **40 µg/m³**, a średnia godzinowa **200 µg/m³**.
+                        * **SO2 (Dwutlenek siarki)**: Średnia dobowa norma to **125 µg/m³**, a godzinowa **350 µg/m³**.
+                        * **Ozon (O3)**: Poziom docelowy dla ochrony zdrowia (maksymalne średnie stężenie 8-godzinne): **120 µg/m³**.
+                        * **CO (Tlenek węgla)**: Maksymalne średnie stężenie 8-godzinne wynosi **10 mg/m³** (10000 µg/m³).
+                        """)
 
-                        mask = (df_filtered.index.date >= rep_start) & (df_filtered.index.date <= rep_end)
-                        df_final_pdf = df_filtered.loc[mask]
+                    st.markdown("#### Tabela wyników (Najnowsze na górze)")
+                    display_df = df_filtered.tail(24).iloc[::-1]
+                    display_df.index = display_df.index.strftime('%Y-%m-%d %H:%M')
+                    st.dataframe(display_df, use_container_width=True)
 
-                        col_csv, col_pdf = st.columns(2)
-                        with col_csv:
-                            csv_hist = display_df.to_csv().encode('utf-8')
-                            st.download_button(
-                                label="📥 Pobierz wyniki do CSV",
-                                data=csv_hist,
-                                file_name=f"historia_{selected_station.replace(' ', '_')}.csv",
-                                mime="text/csv"
-                            )
-                        with col_pdf:
-                            sel_s_info = station_dict[selected_station]
-                            pdf_bytes = generate_general_pdf_report(
-                                title="Raport Pomiary Naziemne (GIOS / Copernicus)",
-                                subtitle=f"Stacja pomiarowa: {selected_station} | Okres: {rep_start} do {rep_end}",
-                                df_data=df_final_pdf,
-                                lat=float(sel_s_info['gegrLat']),
-                                lon=float(sel_s_info['gegrLon']),
-                                station_name=selected_station
-                            )
-                            st.download_button(
-                                label="📥 Pobierz oficjalny raport PDF",
-                                data=pdf_bytes,
-                                file_name=f"raport_{selected_station.replace(' ', '_')}.pdf",
-                                mime="application/pdf"
-                            )
-                    else:
-                        st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
+                    st.markdown("#### ⚙️ Ustawienia raportu PDF")
+                    min_d = df_filtered.index.min().date()
+                    max_d = min(df_filtered.index.max().date(), pd.Timestamp.today().date())
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        rep_start = st.date_input("Od daty:", value=min_d, min_value=min_d, max_value=max_d)
+                    with c2:
+                        rep_end = st.date_input("Do daty:", value=max_d, min_value=min_d, max_value=max_d)
+
+                    mask = (df_filtered.index.date >= rep_start) & (df_filtered.index.date <= rep_end)
+                    df_final_pdf = df_filtered.loc[mask]
+
+                    col_csv, col_pdf = st.columns(2)
+                    with col_csv:
+                        csv_hist = display_df.to_csv().encode('utf-8')
+                        st.download_button(
+                            label="📥 Pobierz wyniki do CSV",
+                            data=csv_hist,
+                            file_name=f"historia_wsp_{lat:.2f}_{lon:.2f}.csv",
+                            mime="text/csv"
+                        )
+                    with col_pdf:
+                        pdf_bytes = generate_general_pdf_report(
+                            title="Raport Pomiary Naziemne (Copernicus)",
+                            subtitle=f"Wspolrzedne: {lat:.4f}, {lon:.4f} | Okres: {rep_start} do {rep_end}",
+                            df_data=df_final_pdf,
+                            lat=lat,
+                            lon=lon,
+                            station_name=f"Wirtualna stacja {lat:.3f}, {lon:.3f}"
+                        )
+                        st.download_button(
+                            label="📥 Pobierz oficjalny raport PDF",
+                            data=pdf_bytes,
+                            file_name=f"raport_{lat:.2f}_{lon:.2f}.pdf",
+                            mime="application/pdf"
+                        )
+                else:
+                    st.warning("Zaznacz przynajmniej jeden parametr powyżej, aby wygenerować wykres.")
 
         # ---------------- MODUŁ 4: JAKOŚĆ WÓD ----------------
         elif modul == "Jakość Wód (Chlorofil-a)":
@@ -646,7 +652,7 @@ if init_gee():
             Ten moduł w czasie rzeczywistym skanuje całe województwo zachodniopomorskie:
             * Skan satelitarny jakości wód (złota alga) i suszy na obszarach N2000.
             * Weryfikacja anomalii stężeń gazów atmosferycznych.
-            * **NOWOŚĆ:** Połączenie z API państwowych stacji GIOŚ pod kątem krytycznego smogu.
+            * Połączenie z API państwowych stacji i wirtualnymi punktami pomiarowymi pod kątem smogu.
             """)
 
             st.markdown("---")
@@ -656,21 +662,21 @@ if init_gee():
                         all_n2000 = data_plb["features"] + data_plh["features"]
                         alerts, warnings, ok_status, map_data = run_regional_inspection(all_n2000)
 
-                        # Pobieranie danych naziemnych (API GIOŚ) dla zachodniopomorskiego
+                        # Pobieranie danych dla zachodniopomorskiego
                         try:
                             gios_stations = get_gios_stations()
                             for s in gios_stations:
                                 lat, lon = float(s['gegrLat']), float(s['gegrLon'])
                                 if 52.6 <= lat <= 54.6 and 14.0 <= lon <= 17.0:  # Zachodniopomorskie
-                                    aqi, _ = get_gios_aqi(s['id'], lat, lon)
+                                    aqi, _ = get_gios_aqi(s.get('id', 0), lat, lon)
                                     if aqi and ("Zły" in aqi or "Bardzo zły" in aqi):
                                         alerts.append(
-                                            f"**Stacja Naziemna GIOŚ ({s['stationName']}):** Zanotowano awaryjny stan powietrza: {aqi}!")
+                                            f"**Stacja Naziemna ({s['stationName']}):** Zanotowano awaryjny stan powietrza: {aqi}!")
                                         map_data.append({'type': 'gios', 'lat': lat, 'lon': lon,
-                                                         'popup': f"Stacja GIOŚ ({s['stationName']}) - Smog: {aqi}",
+                                                         'popup': f"Stacja ({s['stationName']}) - Smog: {aqi}",
                                                          'color': 'darkred'})
                         except Exception as e:
-                            print(f"Błąd GIOŚ w module alertów: {e}")
+                            print(f"Błąd pomiarów atmosferycznych w module alertów: {e}")
 
                         st.subheader("Wyniki integracji danych przestrzennych:")
 
