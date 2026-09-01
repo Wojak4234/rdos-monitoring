@@ -170,11 +170,6 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
 
         ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
-        if "PT15M" in konf.dataset_id:
-            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 96))
-        elif "PT1H" in konf.dataset_id:
-            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
-
         sub = ostatnie_30[zmienna].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
         try:
@@ -182,10 +177,8 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         except Exception:
             pass
 
-        # Obliczamy paczkę do Pandas PRZED wyciągnięciem średniej
         df_hist = sub.to_dataframe().reset_index().dropna(subset=[zmienna])
 
-        # Nakładamy przestrzenną maskę Zalewu, aby odrzucić słony Bałtyk
         maska_path = "zalew_maska.geojson"
         if os.path.exists(maska_path):
             zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
@@ -193,7 +186,6 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             grid_gdf = gpd.GeoDataFrame(df_hist, geometry=geometria, crs="EPSG:4326")
             df_hist = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
 
-        # Średnia liczona jest teraz tylko z węzłów wewnątrz Zalewu Szczecińskiego
         szereg = df_hist.groupby('time')[zmienna].mean().reset_index()
         szereg.rename(columns={'time': 'Data', zmienna: f"Średnia ({konf.jednostka})"}, inplace=True)
         szereg['Data'] = pd.to_datetime(szereg['Data']).dt.date
@@ -369,17 +361,19 @@ def renderuj_modul_zasolenia():
     except Exception as e:
         st.warning(f"Błąd renderowania mapy: {e}")
 
-    st.markdown("---")
-    st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
-    try:
-        with st.spinner("Pobieranie bezpiecznej historii z CMEMS..."):
-            szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
-        if szereg_df is not None and not szereg_df.empty:
-            st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#e31a1c")
-        else:
-            st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
-    except Exception:
-        st.info("Wykres historyczny niedostępny w tym cyklu.")
+    # WYKRES HISTORYCZNY - TYLKO DLA ZASOLENIA
+    if parametr == "so":
+        st.markdown("---")
+        st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
+        try:
+            with st.spinner("Pobieranie historii z CMEMS..."):
+                szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
+            if szereg_df is not None and not szereg_df.empty:
+                st.line_chart(szereg_df.set_index('Data'), color="#007fff")
+            else:
+                st.info("Brak możliwości wygenerowania trendu 30-dniowego.")
+        except Exception:
+            st.info("Wykres historyczny niedostępny w tym cyklu.")
 
     st.markdown("---")
     st.subheader("📊 Tabela danych przestrzennych (Eksport Excel)")
