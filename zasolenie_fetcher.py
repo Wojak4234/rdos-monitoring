@@ -26,7 +26,6 @@ class ParamConfig:
         self.typ_zmiennej = typ_zmiennej
 
 
-# Ścisła konfiguracja dwóch stabilnych zbiorów danych (SatBałtyk/CMEMS)
 KONFIGURACJA_PARAMETROW = {
     "so": ParamConfig(
         nazwa="Zasolenie wody",
@@ -35,7 +34,7 @@ KONFIGURACJA_PARAMETROW = {
         legend_colors=['#00007f', '#0000ff', '#007fff', '#00ffff', '#7fff7f', '#ffff00', '#ff7f00', '#ff0000',
                        '#7f0000'],
         dataset_id="cmems_mod_bal_phy_anfc_P1D-m",
-        typ_zmiennej="so"
+        typ_zmiennej="zasolenie"
     ),
     "zos": ParamConfig(
         nazwa="Wysokość lustra wody (Bieżące wezbranie / Cofka)",
@@ -44,7 +43,7 @@ KONFIGURACJA_PARAMETROW = {
         legend_colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43',
                        '#d73027'],
         dataset_id="cmems_mod_bal_phy_anfc_PT15M-i",
-        typ_zmiennej="sla"  # SLA = Sea Level Anomaly
+        typ_zmiennej="poziom_wody"
     )
 }
 
@@ -55,17 +54,16 @@ def usun_polskie_znaki(tekst: str) -> str:
 
 
 def precyzyjne_szukanie_zmiennej(ds, oczekiwana):
-    """Zabezpieczenie przed zmianą nazw zmiennych w plikach NetCDF"""
     dostepne = [str(var) for var in ds.data_vars.keys()]
     for var in dostepne:
         if oczekiwana.lower() == var.lower():
             return var
 
-    if oczekiwana == "sla":
+    if oczekiwana == "poziom_wody":
         for var in dostepne:
             if any(k in var.lower() for k in ["sla", "slev", "zos", "ssh", "level"]):
                 return var
-    elif oczekiwana == "so":
+    elif oczekiwana == "zasolenie":
         for var in dostepne:
             if any(k in var.lower() for k in ["so", "salinity", "salt"]):
                 return var
@@ -168,34 +166,33 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
             lat_slice = slice(lat_min, lat_max)
 
         dzisiaj = pd.Timestamp.now(tz='UTC').replace(tzinfo=None)
+        trzydziesci_dni_temu = dzisiaj - pd.Timedelta(days=30)
 
-        # Pancerne rozwiązanie braku pamięci (OOM): Pobieramy 30 małych fragmentów punktowo
-        # zamiast wycinać "plaster" 30-dniowy za jednym zamachem.
-        dates = [dzisiaj - pd.Timedelta(days=i) for i in range(30)]
-        dates.reverse()
+        ostatnie_30 = ds.sel(time=slice(trzydziesci_dni_temu, dzisiaj))
 
-        means = []
-        valid_dates = []
+        if "PT15M" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 96))
+        elif "PT1H" in konf.dataset_id:
+            ostatnie_30 = ostatnie_30.isel(time=slice(None, None, 24))
 
-        for d in dates:
-            try:
-                ds_time = ds.sel(time=d, method='nearest')
-                sub = ds_time[zmienna].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
-                try:
-                    sub = sub.isel(depth=0)
-                except Exception:
-                    pass
-                val = float(sub.mean(skipna=True).item())
-                if not np.isnan(val):
-                    means.append(val)
-                    valid_dates.append(d)
-            except Exception:
-                continue
+        sub = ostatnie_30[zmienna].sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
-        szereg = pd.DataFrame({'Data': valid_dates, f"Średnia ({konf.jednostka})": means})
+        try:
+            sub = sub.isel(depth=0)
+        except Exception:
+            pass
+
+        # .compute() wymusza pobranie zredukowanej paczki, omijając wielokrotne odpytywanie
+        srednie = sub.mean(dim=['latitude', 'longitude'], skipna=True).compute()
+
+        szereg = pd.DataFrame({
+            'Data': pd.to_datetime(srednie.time.values),
+            f"Średnia ({konf.jednostka})": srednie.values
+        })
         szereg['Data'] = szereg['Data'].dt.date
-        return szereg
+        return szereg.dropna()
     except Exception as e:
+        print(f"Blad przy generowaniu trendu: {e}")
         return None
 
 
@@ -225,8 +222,7 @@ def renderuj_modul_zasolenia():
 
     vals_array = np.array([p["wartosc"] for p in siatka_gradientu])
     val_min, val_max, val_mean = float(vals_array.min()), float(vals_array.max()), float(vals_array.mean())
-    st.success(
-        f"✅ Przestrzenny model (zmienna: {aktywna_zmienna}) pobrany pomyślnie. Wdrożono blokadę wycieków pamięci RAM.")
+    st.success(f"✅ Przestrzenny model (zmienna: {aktywna_zmienna}) pobrany pomyślnie.")
 
     st.info(f"📅 **Stan faktyczny na:** {data_modelu} UTC")
 
@@ -347,11 +343,11 @@ def renderuj_modul_zasolenia():
                     ">
                 </div>
                 <div style="display: flex; flex-direction: column; justify-content: space-between; margin-left: 10px; height: 100%;">
-                    <span>{val_max:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.75:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.5:.2f}</span>
-                    <span>{val_min + (val_max - val_min) * 0.25:.2f}</span>
-                    <span>{val_min:.2f}</span>
+                    <span>{val_max:.3f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.75:.3f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.5:.3f}</span>
+                    <span>{val_min + (val_max - val_min) * 0.25:.3f}</span>
+                    <span>{val_min:.3f}</span>
                 </div>
             </div>
         </div>
@@ -368,7 +364,7 @@ def renderuj_modul_zasolenia():
     st.markdown("---")
     st.subheader(f"📈 Dynamika zmian - {konf.nazwa} (Ostatnie 30 dni)")
     try:
-        with st.spinner("Pobieranie bezpiecznej, kafelkowanej historii z CMEMS..."):
+        with st.spinner("Pobieranie bezpiecznej historii z CMEMS..."):
             szereg_df = pobierz_szereg_czasowy_30_dni(parametr)
         if szereg_df is not None and not szereg_df.empty:
             st.line_chart(szereg_df.set_index('Data'), color="#007fff" if parametr == "so" else "#e31a1c")
