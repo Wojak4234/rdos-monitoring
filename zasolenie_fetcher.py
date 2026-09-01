@@ -182,14 +182,22 @@ def pobierz_szereg_czasowy_30_dni(parametr: str = "so"):
         except Exception:
             pass
 
-        # .compute() wymusza pobranie zredukowanej paczki, omijając wielokrotne odpytywanie
-        srednie = sub.mean(dim=['latitude', 'longitude'], skipna=True).compute()
+        # Obliczamy paczkę do Pandas PRZED wyciągnięciem średniej
+        df_hist = sub.to_dataframe().reset_index().dropna(subset=[zmienna])
 
-        szereg = pd.DataFrame({
-            'Data': pd.to_datetime(srednie.time.values),
-            f"Średnia ({konf.jednostka})": srednie.values
-        })
-        szereg['Data'] = szereg['Data'].dt.date
+        # Nakładamy przestrzenną maskę Zalewu, aby odrzucić słony Bałtyk
+        maska_path = "zalew_maska.geojson"
+        if os.path.exists(maska_path):
+            zalew_gdf = gpd.read_file(maska_path).to_crs("EPSG:4326")
+            geometria = [Point(xy) for xy in zip(df_hist['longitude'], df_hist['latitude'])]
+            grid_gdf = gpd.GeoDataFrame(df_hist, geometry=geometria, crs="EPSG:4326")
+            df_hist = gpd.sjoin(grid_gdf, zalew_gdf, predicate="intersects")
+
+        # Średnia liczona jest teraz tylko z węzłów wewnątrz Zalewu Szczecińskiego
+        szereg = df_hist.groupby('time')[zmienna].mean().reset_index()
+        szereg.rename(columns={'time': 'Data', zmienna: f"Średnia ({konf.jednostka})"}, inplace=True)
+        szereg['Data'] = pd.to_datetime(szereg['Data']).dt.date
+
         return szereg.dropna()
     except Exception as e:
         print(f"Blad przy generowaniu trendu: {e}")
